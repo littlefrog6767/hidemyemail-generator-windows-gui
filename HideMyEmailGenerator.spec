@@ -3,10 +3,10 @@
 
 a = Analysis(
     ['app.py'],
-    pathex=[],
+    pathex=['vendor'],
     binaries=[],
     datas=[('data', 'data'), ('vendor', 'vendor'), ('gui', 'gui')],
-    hiddenimports=[],
+    hiddenimports=['aiohttp', 'certifi', 'click'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
