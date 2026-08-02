@@ -1,0 +1,5 @@
+customtkinter>=5.2.2
+aiohttp>=3.9.4
+certifi>=2024.2.2
+rich>=13.7.1
+click>=8.1.7
