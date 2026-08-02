@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=['vendor'],
     binaries=[],
-    datas=[('data', 'data'), ('vendor', 'vendor'), ('gui', 'gui')],
+    datas=[('vendor', 'vendor'), ('gui', 'gui')],
     hiddenimports=['aiohttp', 'certifi', 'click'],
     hookspath=[],
     hooksconfig={},

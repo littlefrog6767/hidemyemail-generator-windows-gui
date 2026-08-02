@@ -1,13 +1,23 @@
-"""Local app state and config paths. Everything lives under data/, next to
-this project's own folder, mirroring how the upstream CLI keeps cookies.txt
-and its sqlite db next to itself."""
+"""Local app state and config paths. Everything lives under data/.
+
+When running from source, that's next to this project's own folder,
+mirroring how the upstream CLI keeps cookies.txt and its sqlite db next to
+itself. When frozen by PyInstaller, __file__ resolves inside the temporary
+extraction directory (onefile) or the install directory (onedir) — neither
+of which is a safe place for persistent per-user data — so we use the
+per-user AppData folder instead.
+"""
 
 import json
+import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
+if getattr(sys, "frozen", False):
+    DATA_DIR = Path.home() / "AppData" / "Local" / "HideMyEmailGenerator" / "data"
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 COOKIE_FILE = DATA_DIR / "cookies.txt"
 DB_FILE = DATA_DIR / "hidemyemail.db"
