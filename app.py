@@ -50,6 +50,7 @@ class App(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         self._nav_buttons = {}
+        self._active_key = None
         self._build_sidebar()
         self._build_content()
 
@@ -128,13 +129,19 @@ class App(ctk.CTk):
         for view in self.views.values():
             view.grid(row=0, column=0, sticky="nsew")
 
+        # Both tabs' tables are rebuilt from scratch on refresh(), which is
+        # expensive (hundreds of widgets). Only do that when their data
+        # actually changed (tracked via on_addresses_changed / initial load),
+        # not on every nav click.
+        self._dirty = {"addresses": True, "inbox": True}
+
     def _show(self, key):
+        self._active_key = key
         self.views[key].tkraise()
         self._select_nav(key)
-        if key == "addresses":
-            self.views["addresses"].refresh()
-        elif key == "inbox":
-            self.views["inbox"].refresh()
+        if key in self._dirty and self._dirty[key]:
+            self.views[key].refresh()
+            self._dirty[key] = False
 
     # ---- account / sign-in --------------------------------------------
     def _on_account_button(self):
@@ -163,9 +170,15 @@ class App(ctk.CTk):
 
     # ---- cross-view refresh --------------------------------------------
     def on_addresses_changed(self):
-        self.views["addresses"].refresh()
-        # Inbox syncing also upserts addresses; keep its table consistent too.
-        self.views["inbox"].refresh()
+        # Inbox syncing also upserts addresses, so both tables are affected.
+        # Refresh immediately only whichever tab is currently visible; the
+        # other is marked dirty and refreshed lazily next time it's shown.
+        for key in ("addresses", "inbox"):
+            if key == self._active_key:
+                self.views[key].refresh()
+                self._dirty[key] = False
+            else:
+                self._dirty[key] = True
 
     def _on_close(self):
         self.worker.shutdown()

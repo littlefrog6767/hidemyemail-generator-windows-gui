@@ -78,7 +78,21 @@ class SimpleTable(ctk.CTkScrollableFrame):
             self.grid_columnconfigure(i, weight=weight)
         self._header_widgets = []
         self._data_rows = []
+        self._rendered_key = None
         self._build_header()
+
+    @staticmethod
+    def _rows_key(rows):
+        """A hashable fingerprint of the rendered data. Cell widgets built by
+        cell_builder are a pure function of (row_index, col_index, key, row),
+        so identical rows always render identically — safe to skip the
+        rebuild entirely when nothing changed."""
+        try:
+            key = tuple(tuple(sorted(row.items())) for row in rows)
+            hash(key)  # force the check — building the tuple alone won't raise
+        except TypeError:
+            return None  # unhashable value in a row — always rebuild
+        return key
 
     def _build_header(self):
         for i, (_, heading, _) in enumerate(self.columns):
@@ -99,6 +113,10 @@ class SimpleTable(ctk.CTkScrollableFrame):
         self._data_rows = []
 
     def set_rows(self, rows, cell_builder=None, empty_text="Nothing here yet."):
+        key = self._rows_key(rows)
+        if key is not None and key == self._rendered_key:
+            return
+        self._rendered_key = key
         self.clear_rows()
         for r, row in enumerate(rows, start=1):
             row_widgets = []
