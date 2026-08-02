@@ -30,6 +30,7 @@ class AddressesView(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.app = app
         self._icloud_cache = []
+        self._search_after_id = None
         self._build()
 
     def _build(self):
@@ -71,7 +72,7 @@ class AddressesView(ctk.CTkFrame):
             fg_color=theme.BG_INPUT, border_color=theme.BORDER, width=260,
         )
         search.pack(side="left")
-        search.bind("<KeyRelease>", lambda _e: self._refresh_local())
+        search.bind("<KeyRelease>", lambda _e: self._schedule_refresh_local())
 
         self.state_filter_var = ctk.StringVar(value="All")
         ctk.CTkOptionMenu(
@@ -94,7 +95,13 @@ class AddressesView(ctk.CTkFrame):
         self.local_status = ctk.CTkLabel(parent, text="", text_color=theme.TEXT_SECONDARY)
         self.local_status.pack(anchor="w", padx=4, pady=(4, 0))
 
+    def _schedule_refresh_local(self):
+        if self._search_after_id is not None:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(200, self._refresh_local)
+
     def _refresh_local(self):
+        self._search_after_id = None
         conn = backend.connect_db(self.app.app_state.db_file)
         try:
             state = self.state_filter_var.get()
