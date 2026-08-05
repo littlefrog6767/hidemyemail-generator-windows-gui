@@ -34,6 +34,7 @@ class AppState:
         self.account = None  # dict from account_summary(), or None if signed out
         self.addresses_sort = "created_desc"
         self.addresses_filter = "All"
+        self.window_geometry = None  # e.g. "1360x900+120+80"; None = use the default
         self._load()
 
     def _load(self):
@@ -47,6 +48,7 @@ class AppState:
         self.account = data.get("account")
         self.addresses_sort = data.get("addresses_sort", "created_desc")
         self.addresses_filter = data.get("addresses_filter", "All")
+        self.window_geometry = data.get("window_geometry")
 
     def save(self):
         GUI_CONFIG_FILE.write_text(
@@ -56,6 +58,7 @@ class AppState:
                     "account": self.account,
                     "addresses_sort": self.addresses_sort,
                     "addresses_filter": self.addresses_filter,
+                    "window_geometry": self.window_geometry,
                 },
                 ensure_ascii=False,
                 indent=2,

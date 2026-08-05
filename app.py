@@ -36,8 +36,11 @@ class App(ctk.CTk):
         self.worker = AsyncWorker(self)
 
         self.title("HideMyEmail Generator")
-        self.geometry("1360x900")
         self.minsize(1000, 680)
+        try:
+            self.geometry(self.app_state.window_geometry or "1360x900")
+        except Exception:
+            self.geometry("1360x900")
         self.configure(fg_color=theme.BG_MAIN)
         icon_path = ASSETS_DIR / "icon.ico"
         if icon_path.exists():
@@ -181,6 +184,8 @@ class App(ctk.CTk):
                 self._dirty[key] = True
 
     def _on_close(self):
+        self.app_state.window_geometry = self.geometry()
+        self.app_state.save()
         self.worker.shutdown()
         self.destroy()
 

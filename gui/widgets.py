@@ -181,3 +181,11 @@ class SimpleTable(ctk.CTkScrollableFrame):
             )
             empty.grid(row=1, column=0, columnspan=len(self.columns), sticky="w", padx=8, pady=14)
             self._data_rows.append([empty])
+
+        # Tk defers a chunk of layout/mapping work for newly-placed widgets
+        # until the container is actually raised to the front again — which
+        # otherwise shows up as an unrelated-feeling stutter the next time
+        # this tab is switched to, on top of the rebuild cost already paid
+        # here. Forcing it now keeps that cost attributed to this rebuild
+        # instead of surfacing later as a second, seemingly random one.
+        self.update_idletasks()
