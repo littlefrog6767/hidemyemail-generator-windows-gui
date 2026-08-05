@@ -68,6 +68,7 @@ class AddressesView(ctk.CTkFrame):
             app.app_state.addresses_filter if app.app_state.addresses_filter in STATE_FILTERS else "All"
         )
         self._page = 0
+        self._icloud_page = 0
         self._selected = set()  # emails selected, independent of pagination
         self._last_filtered_emails = []  # all emails matching the current filter/search (not just this page)
         self._select_labels = {}  # email -> the rendered "select" cell label, current page only
@@ -543,6 +544,7 @@ class AddressesView(ctk.CTkFrame):
             conn.close()
 
         self._icloud_cache = addresses
+        self._icloud_page = 0
         self.local_status.configure(
             text=f"Synced {len(addresses)} address(es) from iCloud.", text_color=theme.SUCCESS
         )
@@ -560,8 +562,30 @@ class AddressesView(ctk.CTkFrame):
         self.icloud_table = SimpleTable(parent, ICLOUD_COLUMNS)
         self.icloud_table.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
+        icloud_pagination_row = ctk.CTkFrame(parent, fg_color="transparent")
+        icloud_pagination_row.pack(fill="x", padx=4, pady=(4, 0))
+        self.icloud_prev_page_btn = SecondaryButton(
+            icloud_pagination_row, text="◀ Prev", width=80, height=26, command=self._icloud_prev_page,
+        )
+        self.icloud_prev_page_btn.pack(side="left")
+        self.icloud_page_label = ctk.CTkLabel(icloud_pagination_row, text="", text_color=theme.TEXT_SECONDARY)
+        self.icloud_page_label.pack(side="left", padx=12)
+        self.icloud_next_page_btn = SecondaryButton(
+            icloud_pagination_row, text="Next ▶", width=80, height=26, command=self._icloud_next_page,
+        )
+        self.icloud_next_page_btn.pack(side="left")
+
         self.icloud_status = ctk.CTkLabel(parent, text="Not synced yet.", text_color=theme.TEXT_SECONDARY)
         self.icloud_status.pack(anchor="w", padx=4, pady=(4, 0))
+
+    def _icloud_prev_page(self):
+        if self._icloud_page > 0:
+            self._icloud_page -= 1
+            self._refresh_icloud()
+
+    def _icloud_next_page(self):
+        self._icloud_page += 1
+        self._refresh_icloud()
 
     def _refresh_icloud(self):
         rows = []
@@ -569,11 +593,27 @@ class AddressesView(ctk.CTkFrame):
             row = dict(addr)
             row["status"] = "Active" if addr["is_active"] else "Inactive"
             rows.append(row)
+
+        total = len(rows)
+        page_count = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self._icloud_page = max(0, min(self._icloud_page, page_count - 1))
+        start = self._icloud_page * PAGE_SIZE
+        page_rows = rows[start:start + PAGE_SIZE]
+
         self.icloud_table.set_rows(
-            rows, cell_builder=self._icloud_cell,
+            page_rows, cell_builder=self._icloud_cell,
             empty_text="Nothing synced yet — click Refresh from iCloud.",
         )
-        self.icloud_status.configure(text=f"{len(rows)} address(es) on iCloud")
+        self.icloud_prev_page_btn.configure(state="normal" if self._icloud_page > 0 else "disabled")
+        self.icloud_next_page_btn.configure(state="normal" if self._icloud_page < page_count - 1 else "disabled")
+        if total:
+            self.icloud_page_label.configure(
+                text=f"Page {self._icloud_page + 1} of {page_count}  ·  "
+                     f"{start + 1}–{min(start + PAGE_SIZE, total)} of {total}"
+            )
+        else:
+            self.icloud_page_label.configure(text="")
+        self.icloud_status.configure(text=f"{total} address(es) on iCloud")
 
     def _icloud_cell(self, row_index, col_index, key, row):
         if key == "created_at":
