@@ -32,7 +32,11 @@ class AppState:
     def __init__(self):
         self.region = "global"
         self.account = None  # dict from account_summary(), or None if signed out
-        self.addresses_sort = "created_desc"
+        # Sort/state grouping is now driven by clickable column headers
+        # rather than one combined dropdown — two independent axes.
+        self.addresses_sort_key = "created_at"  # "created_at" or "label"
+        self.addresses_sort_dir = "desc"  # "asc" or "desc"
+        self.addresses_state_dir = "asc"  # "asc" = Used,Unused,Trash; "desc" = reverse
         self.addresses_filter = "All"
         self.window_geometry = None  # e.g. "1360x900+120+80"; None = use the default
         self._load()
@@ -46,7 +50,9 @@ class AppState:
             return
         self.region = data.get("region", "global")
         self.account = data.get("account")
-        self.addresses_sort = data.get("addresses_sort", "created_desc")
+        self.addresses_sort_key = data.get("addresses_sort_key", "created_at")
+        self.addresses_sort_dir = data.get("addresses_sort_dir", "desc")
+        self.addresses_state_dir = data.get("addresses_state_dir", "asc")
         self.addresses_filter = data.get("addresses_filter", "All")
         self.window_geometry = data.get("window_geometry")
 
@@ -56,7 +62,9 @@ class AppState:
                 {
                     "region": self.region,
                     "account": self.account,
-                    "addresses_sort": self.addresses_sort,
+                    "addresses_sort_key": self.addresses_sort_key,
+                    "addresses_sort_dir": self.addresses_sort_dir,
+                    "addresses_state_dir": self.addresses_state_dir,
                     "addresses_filter": self.addresses_filter,
                     "window_geometry": self.window_geometry,
                 },

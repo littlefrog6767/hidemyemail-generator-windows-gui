@@ -70,13 +70,11 @@ __all__ = [
     "bulk_set_state",
 ]
 
-# Local addresses are always grouped by state in this fixed order, no matter
-# what secondary sort the user picks (Apple's own app does the same).
-STATE_SORT_ORDER = {"used": 0, "unused": 1, "trash": 2}
-
-SORT_LABEL_ASC = "label_asc"
-SORT_CREATED_DESC = "created_desc"
-SORT_CREATED_ASC = "created_asc"
+# Local addresses are always grouped by state, no matter what secondary sort
+# the user picks (Apple's own app does the same) — but which of the two
+# fixed orders applies (Used>Unused>Trash, or its reverse) is itself
+# clickable/reversible, independent of the label/created secondary sort.
+STATE_SORT_ORDER_ASC = {"used": 0, "unused": 1, "trash": 2}
 
 
 def _silent_client(cookie_file: str, region: str) -> RichHideMyEmail:
@@ -165,11 +163,24 @@ async def update_metadata(cookie_file: str, region: str, email: str, label, note
         return await hme.update_metadata(email, label, note)
 
 
-def list_addresses_full(conn, state: str = None, sort: str = SORT_CREATED_DESC, limit: int = 500):
-    """Like the vendored list_addresses, but also returns created_at and
-    always sorts with state grouped first (used, unused, trash), then by
-    the requested secondary sort — Python-side, on top of a fixed query, so
-    vendor/hidemyemail_generator stays unmodified."""
+def list_addresses_full(
+    conn,
+    state: str = None,
+    sort_key: str = "created_at",
+    sort_dir: str = "desc",
+    state_dir: str = "asc",
+    limit: int = 500,
+):
+    """Like the vendored list_addresses, but also returns created_at.
+
+    Rows are always grouped by state first — sort_key/sort_dir ("label" or
+    "created_at", each "asc"/"desc") only controls the order *within* each
+    state group. state_dir ("asc" = Used, Unused, Trash; "desc" = reverse)
+    controls the state grouping's own direction, independently. Both are
+    driven by clicking column headers, not a single combined dropdown.
+    Python-side, on top of a fixed query, so vendor/hidemyemail_generator
+    stays unmodified.
+    """
     if state:
         rows = conn.execute(
             """
@@ -185,11 +196,14 @@ def list_addresses_full(conn, state: str = None, sort: str = SORT_CREATED_DESC, 
 
     items = [dict(row) for row in rows]
 
-    if sort == SORT_LABEL_ASC:
-        items.sort(key=lambda r: (r.get("label") or "").lower())
+    if sort_key == "label":
+        items.sort(key=lambda r: (r.get("label") or "").lower(), reverse=(sort_dir == "desc"))
     else:
-        items.sort(key=lambda r: r.get("created_at") or "", reverse=(sort == SORT_CREATED_DESC))
-    items.sort(key=lambda r: STATE_SORT_ORDER.get(r["state"], 99))  # stable — state group wins
+        items.sort(key=lambda r: r.get("created_at") or "", reverse=(sort_dir == "desc"))
+    items.sort(
+        key=lambda r: STATE_SORT_ORDER_ASC.get(r["state"], 99),
+        reverse=(state_dir == "desc"),
+    )  # stable — state group wins over the secondary sort above
 
     return items[:limit]
 

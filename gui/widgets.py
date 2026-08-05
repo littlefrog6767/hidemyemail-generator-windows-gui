@@ -110,11 +110,15 @@ class SimpleTable(ctk.CTkScrollableFrame):
     None falls back to a plain text label using row_dict[key].
     """
 
-    def __init__(self, master, columns, **kwargs):
+    def __init__(self, master, columns, on_header_click=None, sortable_keys=None, **kwargs):
         kwargs.setdefault("fg_color", theme.BG_INPUT)
         kwargs.setdefault("corner_radius", 10)
         super().__init__(master, **kwargs)
         self.columns = columns
+        self._on_header_click = on_header_click
+        self._sortable_keys = set(sortable_keys) if sortable_keys is not None else {c[0] for c in columns}
+        self._column_headings = {key: heading for key, heading, _ in columns}
+        self._header_widgets_by_key = {}
         for i, (_, _, weight) in enumerate(columns):
             self.grid_columnconfigure(i, weight=weight)
         self._header_widgets = []
@@ -136,16 +140,35 @@ class SimpleTable(ctk.CTkScrollableFrame):
         return key
 
     def _build_header(self):
-        for i, (_, heading, _) in enumerate(self.columns):
+        for i, (key, heading, _) in enumerate(self.columns):
+            sortable = self._on_header_click is not None and key in self._sortable_keys and heading
             lbl = ctk.CTkLabel(
                 self,
                 text=heading,
                 anchor="w",
+                cursor="hand2" if sortable else "",
                 text_color=theme.TEXT_SECONDARY,
                 font=(theme.FONT_FAMILY, 11, "bold"),
             )
             lbl.grid(row=0, column=i, sticky="ew", padx=8, pady=(6, 10))
             self._header_widgets.append(lbl)
+            self._header_widgets_by_key[key] = lbl
+            if sortable:
+                lbl.bind("<Button-1>", lambda _e, key=key: self._on_header_click(key))
+
+    def set_sort_indicators(self, indicators):
+        """indicators: {key: 'asc'|'desc'} for every header that should show
+        an arrow right now (supports more than one active at once, e.g. a
+        primary state grouping plus a secondary label/date sort). Any header
+        not in the dict shows its plain heading with no arrow."""
+        for key, lbl in self._header_widgets_by_key.items():
+            base = self._column_headings.get(key, "")
+            direction = indicators.get(key)
+            if direction and base:
+                arrow = "▲" if direction == "asc" else "▼"
+                lbl.configure(text=f"{base} {arrow}")
+            else:
+                lbl.configure(text=base)
 
     def clear_rows(self):
         for widgets in self._data_rows:

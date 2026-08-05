@@ -42,14 +42,10 @@ ICLOUD_COLUMNS = [
 
 STATE_FILTERS = ("All", "unused", "used", "trash")
 
-# Order matters here — this is also the display order of the sort dropdown.
-SORT_OPTIONS = [
-    (backend.SORT_CREATED_DESC, "Newest created"),
-    (backend.SORT_CREATED_ASC, "Oldest created"),
-    (backend.SORT_LABEL_ASC, "Label A–Z"),
-]
-SORT_LABEL_TO_KEY = {label: key for key, label in SORT_OPTIONS}
-SORT_KEY_TO_LABEL = {key: label for key, label in SORT_OPTIONS}
+# Label/State/Created column headers are clickable to sort — no dropdown.
+# State toggles which of the two fixed group orders applies; Label/Created
+# control the secondary order within each state group.
+SORTABLE_COLUMNS = {"label", "state", "created_at"}
 
 # CustomTkinter's per-row widgets (CTkOptionMenu/CTkCheckBox) and
 # CTkScrollableFrame get dramatically slower to build/destroy as row count
@@ -67,6 +63,9 @@ class AddressesView(ctk.CTkFrame):
         self._state_filter = (
             app.app_state.addresses_filter if app.app_state.addresses_filter in STATE_FILTERS else "All"
         )
+        self._sort_key = app.app_state.addresses_sort_key if app.app_state.addresses_sort_key in ("label", "created_at") else "created_at"
+        self._sort_dir = app.app_state.addresses_sort_dir if app.app_state.addresses_sort_dir in ("asc", "desc") else "desc"
+        self._state_dir = app.app_state.addresses_state_dir if app.app_state.addresses_state_dir in ("asc", "desc") else "asc"
         self._page = 0
         self._icloud_page = 0
         self._selected = set()  # emails selected, independent of pagination
@@ -115,17 +114,10 @@ class AddressesView(ctk.CTkFrame):
         search.pack(side="left")
         search.bind("<KeyRelease>", lambda _e: self._schedule_refresh_local())
 
-        ctk.CTkLabel(toolbar, text="Sort", text_color=theme.TEXT_SECONDARY).pack(
-            side="left", padx=(14, 6)
-        )
-        initial_sort_label = SORT_KEY_TO_LABEL.get(self.app.app_state.addresses_sort, SORT_OPTIONS[0][1])
-        self.sort_var = ctk.StringVar(value=initial_sort_label)
-        ctk.CTkOptionMenu(
-            toolbar, values=[label for _, label in SORT_OPTIONS], variable=self.sort_var,
-            command=lambda _v: self._on_sort_changed(), fg_color=theme.BG_INPUT,
-            button_color=theme.BG_CARD_ALT, button_hover_color=theme.SIDEBAR_HOVER,
-            width=150,
-        ).pack(side="left")
+        ctk.CTkLabel(
+            toolbar, text="Click Label / State / Created to sort", text_color=theme.TEXT_MUTED,
+            font=(theme.FONT_FAMILY, 11),
+        ).pack(side="left", padx=(14, 0))
 
         self.select_all_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
@@ -160,7 +152,14 @@ class AddressesView(ctk.CTkFrame):
         # a slot that's always in place (right before the table) so toggling
         # the bar's own pack/pack_forget doesn't need positioning relative to
         # a CTkScrollableFrame sibling (which pack(before=...) can't target).
-        self.bulk_bar_slot = ctk.CTkFrame(parent, fg_color="transparent")
+        # height=1: CTkFrame defaults to a 200px requested height even with
+        # no children — since this slot should only ever be as tall as
+        # whatever's packed inside it (nothing, most of the time), that
+        # default was silently eating over a third of the table's available
+        # vertical space on every load. pack_propagate stays enabled (the
+        # default) so it still grows to fit the bulk action bar once one is
+        # actually packed into it.
+        self.bulk_bar_slot = ctk.CTkFrame(parent, fg_color="transparent", height=1)
         self.bulk_bar_slot.pack(fill="x", padx=4)
         self.bulk_bar = ctk.CTkFrame(self.bulk_bar_slot, fg_color=theme.BG_CARD_ALT, corner_radius=8)
         self.bulk_count_label = ctk.CTkLabel(
@@ -186,7 +185,9 @@ class AddressesView(ctk.CTkFrame):
         ).pack(side="left", pady=8)
         # Not packed yet — _update_bulk_bar() shows/hides it based on selection.
 
-        self.local_table = SimpleTable(parent, LOCAL_COLUMNS)
+        self.local_table = SimpleTable(
+            parent, LOCAL_COLUMNS, on_header_click=self._on_header_click, sortable_keys=SORTABLE_COLUMNS,
+        )
         self.local_table.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
         pagination_row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -218,11 +219,21 @@ class AddressesView(ctk.CTkFrame):
         self.app.app_state.save()
         self._refresh_local()
 
-    def _on_sort_changed(self):
-        sort_key = SORT_LABEL_TO_KEY.get(self.sort_var.get(), backend.SORT_CREATED_DESC)
-        self._page = 0
-        self.app.app_state.addresses_sort = sort_key
+    def _on_header_click(self, key):
+        if key == "state":
+            self._state_dir = "desc" if self._state_dir == "asc" else "asc"
+            self.app.app_state.addresses_state_dir = self._state_dir
+        else:  # "label" or "created_at"
+            if self._sort_key == key:
+                self._sort_dir = "desc" if self._sort_dir == "asc" else "asc"
+            else:
+                self._sort_key = key
+                # sensible first click per column: newest-first for dates, A-Z for text
+                self._sort_dir = "desc" if key == "created_at" else "asc"
+            self.app.app_state.addresses_sort_key = self._sort_key
+            self.app.app_state.addresses_sort_dir = self._sort_dir
         self.app.app_state.save()
+        self._page = 0
         self._refresh_local()
 
     def _prev_page(self):
@@ -236,7 +247,6 @@ class AddressesView(ctk.CTkFrame):
 
     def _refresh_local(self):
         self._search_after_id = None
-        sort_key = SORT_LABEL_TO_KEY.get(self.sort_var.get(), backend.SORT_CREATED_DESC)
         conn = backend.connect_db(self.app.app_state.db_file)
         try:
             counts = {
@@ -253,7 +263,10 @@ class AddressesView(ctk.CTkFrame):
             }
             latest_updated = conn.execute("SELECT MAX(updated_at) FROM addresses").fetchone()[0]
             state = None if self._state_filter == "All" else self._state_filter
-            items = backend.list_addresses_full(conn, state=state, sort=sort_key, limit=5000)
+            items = backend.list_addresses_full(
+                conn, state=state, sort_key=self._sort_key, sort_dir=self._sort_dir,
+                state_dir=self._state_dir, limit=5000,
+            )
         finally:
             conn.close()
 
@@ -287,6 +300,7 @@ class AddressesView(ctk.CTkFrame):
         self._updated_label.configure(
             text=f"Updated {_format_ts(latest_updated)}" if latest_updated else ""
         )
+        self.local_table.set_sort_indicators({"state": self._state_dir, self._sort_key: self._sort_dir})
 
         self.local_table.set_rows(
             page_items, cell_builder=self._local_cell,
