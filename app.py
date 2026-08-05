@@ -36,8 +36,8 @@ class App(ctk.CTk):
         self.worker = AsyncWorker(self)
 
         self.title("HideMyEmail Generator")
-        self.geometry("1040x720")
-        self.minsize(860, 600)
+        self.geometry("1360x900")
+        self.minsize(1000, 680)
         self.configure(fg_color=theme.BG_MAIN)
         icon_path = ASSETS_DIR / "icon.ico"
         if icon_path.exists():
