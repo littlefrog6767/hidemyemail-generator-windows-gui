@@ -419,6 +419,7 @@ class AddressesView(ctk.CTkFrame):
             finally:
                 conn.close()
             self._refresh_local()
+            self._push_labels_to_icloud([email], value)
 
         PromptDialog(
             self, title="Edit label", message=f"Label for {email}:",
@@ -437,11 +438,61 @@ class AddressesView(ctk.CTkFrame):
             finally:
                 conn.close()
             self._refresh_local()
+            self._push_labels_to_icloud(selected, value)
 
         PromptDialog(
             self, title="Edit label", message=f"Set label for {len(selected)} address(es):",
             initial="", on_submit=on_submit,
         )
+
+    def _push_labels_to_icloud(self, emails, label):
+        """Best-effort: also update the label on iCloud itself, not just the
+        local copy, so it doesn't drift out of sync. Only meaningful for
+        addresses that actually exist on iCloud — purely local/manual
+        entries just fail this call and the local edit still stands."""
+        if not self.app.app_state.is_signed_in:
+            return
+        self.local_status.configure(
+            text=f"Saved locally. Syncing {len(emails)} label(s) to iCloud…",
+            text_color=theme.TEXT_SECONDARY,
+        )
+
+        async def _push_all():
+            ok, failed = 0, 0
+            for email in emails:
+                result = await backend.update_metadata(
+                    self.app.app_state.cookie_file, self.app.app_state.region, email, label, None,
+                )
+                if result.get("ok"):
+                    ok += 1
+                else:
+                    failed += 1
+            return ok, failed
+
+        self.app.worker.run_coro(_push_all(), on_done=self._on_labels_pushed)
+
+    def _on_labels_pushed(self, result, error):
+        if error is not None:
+            self.local_status.configure(
+                text=f"Saved locally, but iCloud sync errored: {error}", text_color=theme.WARNING
+            )
+            return
+        ok, failed = result
+        if failed and ok:
+            self.local_status.configure(
+                text=f"Synced {ok} label(s) to iCloud, {failed} failed (not on iCloud, or offline).",
+                text_color=theme.WARNING,
+            )
+        elif failed:
+            self.local_status.configure(
+                text=f"Saved locally, but iCloud sync failed for {failed} address(es) "
+                     "(not on iCloud, or offline).",
+                text_color=theme.WARNING,
+            )
+        else:
+            self.local_status.configure(
+                text=f"Label updated locally and on iCloud ({ok}).", text_color=theme.SUCCESS
+            )
 
     def _bulk_set_state(self, state):
         selected = self._selected_emails()
