@@ -6,8 +6,8 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QItemSelectionModel, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLineEdit, QMenu, QMessageBox, QTabWidget,
-    QTableView, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLineEdit, QMenu, QMessageBox, QProgressBar,
+    QTabWidget, QTableView, QVBoxLayout, QWidget,
 )
 
 from gui import backend
@@ -181,8 +181,25 @@ class AddressesView(QWidget):
         self.local_table.selectionModel().selectionChanged.connect(self._update_bulk_bar)
         layout.addWidget(self.local_table, stretch=1)
 
+        sync_row = QHBoxLayout()
         self.local_status = make_label("", variant="secondary")
-        layout.addWidget(self.local_status)
+        sync_row.addWidget(self.local_status, stretch=1)
+        self.retry_sync_btn = SecondaryButton("Retry failed iCloud sync")
+        self.retry_sync_btn.clicked.connect(self._retry_failed_icloud_sync)
+        self.retry_sync_btn.setVisible(False)
+        sync_row.addWidget(self.retry_sync_btn)
+        layout.addLayout(sync_row)
+
+        self.sync_progress_label = make_label("", variant="secondary")
+        self.sync_progress_label.setVisible(False)
+        layout.addWidget(self.sync_progress_label)
+        self.sync_progress_bar = QProgressBar()
+        self.sync_progress_bar.setTextVisible(False)
+        self.sync_progress_bar.setFixedHeight(6)
+        self.sync_progress_bar.setVisible(False)
+        layout.addWidget(self.sync_progress_bar)
+
+        self._last_failed_icloud_sync = []  # [(email, label)] from the most recent push, for retry
         return parent
 
     def _set_state_filter(self, key):
@@ -305,43 +322,92 @@ class AddressesView(QWidget):
         ).exec()
 
     def _push_labels_to_icloud(self, emails, label):
-        """Best-effort: also update the label on iCloud itself, not just the
-        local copy, so it doesn't drift out of sync. Only meaningful for
-        addresses that actually exist on iCloud — purely local/manual
-        entries just fail this call and the local edit still stands."""
+        """Also update the label on iCloud itself, not just the local copy,
+        so it doesn't drift out of sync. Only meaningful for addresses that
+        actually exist on iCloud — purely local/manual entries just fail
+        this call and the local edit still stands regardless.
+
+        Each address gets one automatic retry if the first attempt fails
+        (transient network hiccups are common over many sequential API
+        calls), and progress is reported live via worker.post() as each one
+        completes, since this loop runs on the background asyncio thread."""
         if not self.app.app_state.is_signed_in:
             return
-        self.local_status.setText(f"Saved locally. Syncing {len(emails)} label(s) to iCloud…")
+        total = len(emails)
+        self._last_sync_label = label
+        self.retry_sync_btn.setVisible(False)
+        self.local_status.setText("Saved locally.")
+        self.sync_progress_label.setVisible(True)
+        self.sync_progress_label.setText(f"Syncing label to iCloud… 0/{total}")
+        self.sync_progress_bar.setRange(0, total)
+        self.sync_progress_bar.setValue(0)
+        self.sync_progress_bar.setVisible(True)
+
+        async def _push_one(email):
+            result = await backend.update_metadata(
+                self.app.app_state.cookie_file, self.app.app_state.region, email, label, None,
+            )
+            if result.get("ok"):
+                return True
+            # one retry — most failures at this point are transient (network
+            # blip), not "this address doesn't exist on iCloud"
+            result = await backend.update_metadata(
+                self.app.app_state.cookie_file, self.app.app_state.region, email, label, None,
+            )
+            return bool(result.get("ok"))
 
         async def _push_all():
-            ok, failed = 0, 0
-            for email in emails:
-                result = await backend.update_metadata(
-                    self.app.app_state.cookie_file, self.app.app_state.region, email, label, None,
-                )
-                if result.get("ok"):
+            ok, failed_emails = 0, []
+            for i, email in enumerate(emails, start=1):
+                success = await _push_one(email)
+                if success:
                     ok += 1
                 else:
-                    failed += 1
-            return ok, failed
+                    failed_emails.append(email)
+                self.app.worker.post(self._on_icloud_sync_progress, i, total)
+            return ok, failed_emails
 
         self.app.worker.run_coro(_push_all(), on_done=self._on_labels_pushed)
 
+    def _on_icloud_sync_progress(self, done, total):
+        self.sync_progress_bar.setValue(done)
+        self.sync_progress_label.setText(f"Syncing label to iCloud… {done}/{total}")
+
     def _on_labels_pushed(self, result, error):
+        self.sync_progress_bar.setVisible(False)
+        self.sync_progress_label.setVisible(False)
         if error is not None:
             self.local_status.setText(f"Saved locally, but iCloud sync errored: {error}")
             return
-        ok, failed = result
+        ok, failed_emails = result
+        failed = len(failed_emails)
+        self._last_failed_icloud_sync = [(email, self._last_sync_label) for email in failed_emails]
+        self.retry_sync_btn.setVisible(bool(failed_emails))
         if failed and ok:
             self.local_status.setText(
-                f"Synced {ok} label(s) to iCloud, {failed} failed (not on iCloud, or offline)."
+                f"Synced {ok} label(s) to iCloud, {failed} failed even after a retry "
+                "(not on iCloud, or offline)."
             )
         elif failed:
             self.local_status.setText(
-                f"Saved locally, but iCloud sync failed for {failed} address(es) (not on iCloud, or offline)."
+                f"Saved locally, but iCloud sync failed for {failed} address(es), even after a retry "
+                "(not on iCloud, or offline)."
             )
         else:
             self.local_status.setText(f"Label updated locally and on iCloud ({ok}).")
+
+    def _retry_failed_icloud_sync(self):
+        if not self._last_failed_icloud_sync:
+            return
+        # Almost always one label shared across the whole failed batch (a
+        # single bulk edit) — group defensively in case retries ever get
+        # queued from more than one edit before being run.
+        by_label = {}
+        for email, label in self._last_failed_icloud_sync:
+            by_label.setdefault(label, []).append(email)
+        self._last_failed_icloud_sync = []
+        for label, emails in by_label.items():
+            self._push_labels_to_icloud(emails, label)
 
     def _bulk_set_state(self, state):
         selected = self._selected_emails()

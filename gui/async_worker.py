@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, Signal, Qt
 
 class _ResultRelay(QObject):
     done = Signal(object, object, object)  # on_done callback, value, error
+    progress = Signal(object, object)  # callback, args tuple
 
 
 class AsyncWorker(QObject):
@@ -20,6 +21,7 @@ class AsyncWorker(QObject):
         super().__init__(parent)
         self._relay = _ResultRelay()
         self._relay.done.connect(self._dispatch, Qt.QueuedConnection)
+        self._relay.progress.connect(self._dispatch_progress, Qt.QueuedConnection)
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -31,6 +33,17 @@ class AsyncWorker(QObject):
     def _dispatch(self, callback, value, error):
         if callback is not None:
             callback(value, error)
+
+    def _dispatch_progress(self, callback, args):
+        if callback is not None:
+            callback(*args)
+
+    def post(self, callback, *args):
+        """Thread-safe: schedules callback(*args) to run on the Qt main
+        thread. For reporting incremental progress from inside a coroutine
+        passed to run_coro — that coroutine runs on the background asyncio
+        loop thread, so it can't touch widgets directly, same as on_done."""
+        self._relay.progress.emit(callback, args)
 
     def run_coro(self, coro, on_done=None):
         """Schedules an async coroutine on the worker loop. on_done(value, error)
