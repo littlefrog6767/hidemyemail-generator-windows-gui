@@ -32,6 +32,8 @@ class AppState:
     def __init__(self):
         self.region = "global"
         self.account = None  # dict from account_summary(), or None if signed out
+        self.addresses_sort = "created_desc"
+        self.addresses_filter = "All"
         self._load()
 
     def _load(self):
@@ -43,11 +45,18 @@ class AppState:
             return
         self.region = data.get("region", "global")
         self.account = data.get("account")
+        self.addresses_sort = data.get("addresses_sort", "created_desc")
+        self.addresses_filter = data.get("addresses_filter", "All")
 
     def save(self):
         GUI_CONFIG_FILE.write_text(
             json.dumps(
-                {"region": self.region, "account": self.account},
+                {
+                    "region": self.region,
+                    "account": self.account,
+                    "addresses_sort": self.addresses_sort,
+                    "addresses_filter": self.addresses_filter,
+                },
                 ensure_ascii=False,
                 indent=2,
             ),

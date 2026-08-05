@@ -41,6 +41,7 @@ from hidemyemail_generator.inbox import (  # noqa: E402
     save_config as save_inbox_config,
     sync_inbox,
     upsert_address,
+    utc_now,
 )
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "connect_db",
     "export_csv_files",
     "list_addresses",
+    "list_addresses_full",
     "list_messages",
     "load_inbox_config",
     "mark_address",
@@ -62,7 +64,19 @@ __all__ = [
     "list_emails",
     "set_active",
     "update_metadata",
+    "set_label",
+    "delete_addresses",
+    "bulk_set_label",
+    "bulk_set_state",
 ]
+
+# Local addresses are always grouped by state in this fixed order, no matter
+# what secondary sort the user picks (Apple's own app does the same).
+STATE_SORT_ORDER = {"used": 0, "unused": 1, "trash": 2}
+
+SORT_LABEL_ASC = "label_asc"
+SORT_CREATED_DESC = "created_desc"
+SORT_CREATED_ASC = "created_asc"
 
 
 def _silent_client(cookie_file: str, region: str) -> RichHideMyEmail:
@@ -149,3 +163,74 @@ async def update_metadata(cookie_file: str, region: str, email: str, label, note
     hme = _silent_client(cookie_file, region)
     async with hme:
         return await hme.update_metadata(email, label, note)
+
+
+def list_addresses_full(conn, state: str = None, sort: str = SORT_CREATED_DESC, limit: int = 500):
+    """Like the vendored list_addresses, but also returns created_at and
+    always sorts with state grouped first (used, unused, trash), then by
+    the requested secondary sort — Python-side, on top of a fixed query, so
+    vendor/hidemyemail_generator stays unmodified."""
+    if state:
+        rows = conn.execute(
+            """
+            SELECT email, label, state, source, created_at, updated_at
+            FROM addresses WHERE state = ?
+            """,
+            (state,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT email, label, state, source, created_at, updated_at FROM addresses"
+        ).fetchall()
+
+    items = [dict(row) for row in rows]
+
+    if sort == SORT_LABEL_ASC:
+        items.sort(key=lambda r: (r.get("label") or "").lower())
+    else:
+        items.sort(key=lambda r: r.get("created_at") or "", reverse=(sort == SORT_CREATED_DESC))
+    items.sort(key=lambda r: STATE_SORT_ORDER.get(r["state"], 99))  # stable — state group wins
+
+    return items[:limit]
+
+
+def set_label(conn, email: str, label: str) -> None:
+    now = utc_now()
+    conn.execute(
+        "UPDATE addresses SET label = ?, updated_at = ? WHERE email = ?", (label, now, email)
+    )
+    conn.commit()
+
+
+def delete_addresses(conn, emails: list) -> None:
+    if not emails:
+        return
+    placeholders = ",".join("?" for _ in emails)
+    conn.execute(f"DELETE FROM addresses WHERE email IN ({placeholders})", emails)
+    conn.commit()
+
+
+def bulk_set_label(conn, emails: list, label: str) -> None:
+    if not emails:
+        return
+    now = utc_now()
+    placeholders = ",".join("?" for _ in emails)
+    conn.execute(
+        f"UPDATE addresses SET label = ?, updated_at = ? WHERE email IN ({placeholders})",
+        [label, now, *emails],
+    )
+    conn.commit()
+
+
+def bulk_set_state(conn, emails: list, state: str) -> None:
+    if not emails:
+        return
+    if state not in ADDRESS_STATES:
+        raise ValueError(f"Unsupported address state: {state}")
+    now = utc_now()
+    placeholders = ",".join("?" for _ in emails)
+    conn.execute(
+        f"UPDATE addresses SET state = ?, updated_at = ? WHERE email IN ({placeholders})",
+        [state, now, *emails],
+    )
+    conn.commit()

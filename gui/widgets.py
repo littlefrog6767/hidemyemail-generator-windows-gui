@@ -59,6 +59,47 @@ class StatusPill(ctk.CTkFrame):
         self.label.configure(text=text)
 
 
+class PromptDialog(ctk.CTkToplevel):
+    """Small modal for editing a single line of text (e.g. a label), used
+    for both single-row and bulk edits. Calls on_submit(value) once the
+    user confirms; does nothing on cancel/close."""
+
+    def __init__(self, master, title, message, initial="", on_submit=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.title(title)
+        self.geometry("420x180")
+        self.resizable(False, False)
+        self.configure(fg_color=theme.BG_MAIN)
+        self.transient(master)
+        self._on_submit = on_submit
+
+        ctk.CTkLabel(
+            self, text=message, text_color=theme.TEXT_SECONDARY, wraplength=380, justify="left",
+        ).pack(anchor="w", padx=20, pady=(20, 8))
+
+        self.entry_var = ctk.StringVar(value=initial)
+        entry = ctk.CTkEntry(
+            self, textvariable=self.entry_var, fg_color=theme.BG_INPUT, border_color=theme.BORDER,
+        )
+        entry.pack(fill="x", padx=20, pady=(0, 16))
+        entry.bind("<Return>", lambda _e: self._submit())
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(padx=20, fill="x")
+        PrimaryButton(btn_row, text="Save", command=self._submit).pack(side="left")
+        SecondaryButton(btn_row, text="Cancel", command=self.destroy).pack(side="left", padx=(10, 0))
+
+        self.after(50, self.grab_set)
+
+    def _submit(self):
+        value = self.entry_var.get().strip()
+        self.destroy()
+        if self._on_submit is not None:
+            self._on_submit(value)
+
+
 class SimpleTable(ctk.CTkScrollableFrame):
     """A minimal scrollable grid table: header row + data rows.
 

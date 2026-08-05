@@ -1,6 +1,8 @@
 """Scheduler tab: generate a larger batch of addresses over time, pausing
 and automatically resuming when Apple rate-limits creation."""
 
+import time
+
 import customtkinter as ctk
 
 from gui import backend, theme
@@ -25,6 +27,8 @@ class SchedulerView(ctk.CTkFrame):
         self._generated_total = 0
         self._backoff_seconds = DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
         self._delay_minutes = DEFAULT_BATCH_DELAY_MINUTES
+        self._waiting_for_rate_limit = False
+        self._rate_limit_deadline = 0.0
         self._build()
 
     def _build(self):
@@ -158,6 +162,7 @@ class SchedulerView(ctk.CTkFrame):
         self._running = True
         self._paused = False
         self._cancelled = False
+        self._waiting_for_rate_limit = False
 
         self.progress_bar.set(0)
         self.log_box.configure(state="normal")
@@ -180,7 +185,10 @@ class SchedulerView(ctk.CTkFrame):
             self.progress_label.configure(text="Paused.", text_color=theme.WARNING)
         else:
             self._log("Resumed.")
-            self._run_batch()
+            if self._waiting_for_rate_limit:
+                self._tick_rate_limit_wait()
+            else:
+                self._run_batch()
 
     def _get_delay_ms(self):
         return max(0, int(self._delay_minutes * 60 * 1000))
@@ -249,17 +257,41 @@ class SchedulerView(ctk.CTkFrame):
             self.after(delay_ms, self._run_batch)
         else:
             err = result.get("error") or {}
-            retry_after = err.get("retry_after") or self._backoff_seconds
-            self._backoff_seconds = min(MAX_BACKOFF_SECONDS, max(retry_after, DEFAULT_RATE_LIMIT_BACKOFF_SECONDS) * 1.5)
             msg = err.get("message", "rate-limited")
             self._log(
-                f"Only {got}/{requested} generated ({msg}). Pausing {int(retry_after)}s before resuming…"
+                f"Only {got}/{requested} generated ({msg}). Apple's limit was reached — "
+                f"stopping instead of hammering it, restarting the {self._delay_minutes:g} min timer."
             )
-            self.progress_label.configure(
-                text=f"Rate-limited — resuming in {int(retry_after)}s ({self._generated_total}/{self._target})",
-                text_color=theme.WARNING,
-            )
-            self.after(int(retry_after * 1000), self._run_batch)
+            self._start_rate_limit_wait()
+
+    def _start_rate_limit_wait(self):
+        # Don't keep retrying into the same rate limit — restart the same
+        # full interval used between successful batches (not a short
+        # reactive backoff) before trying again, same as the reference app.
+        self._waiting_for_rate_limit = True
+        self._rate_limit_deadline = time.monotonic() + self._delay_minutes * 60
+        self._tick_rate_limit_wait()
+
+    def _tick_rate_limit_wait(self):
+        if self._cancelled:
+            self._waiting_for_rate_limit = False
+            self._finish(cancelled=True)
+            return
+        if self._paused:
+            return
+        remaining = self._rate_limit_deadline - time.monotonic()
+        if remaining <= 0:
+            self._waiting_for_rate_limit = False
+            self._log("Timer restarted — trying again.")
+            self._run_batch()
+            return
+        mins, secs = divmod(int(remaining), 60)
+        self.progress_label.configure(
+            text=f"Apple's limit was reached — trying again in {mins:02d}:{secs:02d} "
+                 f"({self._generated_total}/{self._target})",
+            text_color=theme.WARNING,
+        )
+        self.after(1000, self._tick_rate_limit_wait)
 
     def _schedule_retry(self):
         delay = self._backoff_seconds
@@ -269,6 +301,7 @@ class SchedulerView(ctk.CTkFrame):
 
     def _finish(self, cancelled):
         self._running = False
+        self._waiting_for_rate_limit = False
         self._set_controls_running(False)
         if cancelled:
             self._log(f"Cancelled. Generated {self._generated_total}/{self._target} total.")
