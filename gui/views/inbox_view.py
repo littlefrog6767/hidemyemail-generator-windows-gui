@@ -19,11 +19,16 @@ MESSAGE_COLUMNS = [
     ("copy", "", 1),
 ]
 
+# See addresses_view.PAGE_SIZE — same CustomTkinter scaling limitation
+# applies here (rebuilding the whole table gets very slow past ~100+ rows).
+PAGE_SIZE = 25
+
 
 class InboxView(ctk.CTkFrame):
     def __init__(self, master, app, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.app = app
+        self._page = 0
         self._build()
         self._load_config_into_form()
 
@@ -97,12 +102,25 @@ class InboxView(ctk.CTkFrame):
         self.only_codes_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             toolbar, text="Only show codes", variable=self.only_codes_var,
-            text_color=theme.TEXT_SECONDARY, command=self._refresh_messages,
+            text_color=theme.TEXT_SECONDARY, command=self._on_filter_changed,
         ).pack(side="left", padx=(16, 0))
         SecondaryButton(toolbar, text="Export CSV", command=self._export_csv).pack(side="right")
 
         self.messages_table = SimpleTable(messages_card, MESSAGE_COLUMNS)
-        self.messages_table.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        self.messages_table.pack(fill="both", expand=True, padx=18, pady=(0, 4))
+
+        pagination_row = ctk.CTkFrame(messages_card, fg_color="transparent")
+        pagination_row.pack(fill="x", padx=18, pady=(0, 14))
+        self.prev_page_btn = SecondaryButton(
+            pagination_row, text="◀ Prev", width=80, height=26, command=self._prev_page,
+        )
+        self.prev_page_btn.pack(side="left")
+        self.page_label = ctk.CTkLabel(pagination_row, text="", text_color=theme.TEXT_SECONDARY)
+        self.page_label.pack(side="left", padx=12)
+        self.next_page_btn = SecondaryButton(
+            pagination_row, text="Next ▶", width=80, height=26, command=self._next_page,
+        )
+        self.next_page_btn.pack(side="left")
 
     def _load_config_into_form(self):
         try:
@@ -158,20 +176,50 @@ class InboxView(ctk.CTkFrame):
         self.config_status.configure(
             text=f"Synced — {len(inserted)} new message(s).", text_color=theme.SUCCESS
         )
+        self._page = 0
         self._refresh_messages()
         self.app.on_addresses_changed()
+
+    def _on_filter_changed(self):
+        self._page = 0
+        self._refresh_messages()
+
+    def _prev_page(self):
+        if self._page > 0:
+            self._page -= 1
+            self._refresh_messages()
+
+    def _next_page(self):
+        self._page += 1
+        self._refresh_messages()
 
     def _refresh_messages(self):
         conn = backend.connect_db(self.app.app_state.db_file)
         try:
-            rows = backend.list_messages(conn, only_codes=self.only_codes_var.get(), limit=200)
+            rows = backend.list_messages(conn, only_codes=self.only_codes_var.get(), limit=5000)
         finally:
             conn.close()
         items = [dict(row) for row in rows]
+
+        total = len(items)
+        page_count = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self._page = max(0, min(self._page, page_count - 1))
+        start = self._page * PAGE_SIZE
+        page_items = items[start:start + PAGE_SIZE]
+
         self.messages_table.set_rows(
-            items, cell_builder=self._message_cell,
+            page_items, cell_builder=self._message_cell,
             empty_text="No messages synced yet.",
         )
+        self.prev_page_btn.configure(state="normal" if self._page > 0 else "disabled")
+        self.next_page_btn.configure(state="normal" if self._page < page_count - 1 else "disabled")
+        if total:
+            self.page_label.configure(
+                text=f"Page {self._page + 1} of {page_count}  ·  "
+                     f"{start + 1}–{min(start + PAGE_SIZE, total)} of {total}"
+            )
+        else:
+            self.page_label.configure(text="")
 
     def _message_cell(self, row_index, col_index, key, row):
         if key == "copy":

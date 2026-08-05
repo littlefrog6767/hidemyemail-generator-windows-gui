@@ -1,6 +1,7 @@
 """Addresses tab: local unused/used/trash state plus the live iCloud list."""
 
 import os
+import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox
 
@@ -50,6 +51,12 @@ SORT_OPTIONS = [
 SORT_LABEL_TO_KEY = {label: key for key, label in SORT_OPTIONS}
 SORT_KEY_TO_LABEL = {key: label for key, label in SORT_OPTIONS}
 
+# CustomTkinter's per-row widgets (CTkOptionMenu/CTkCheckBox) and
+# CTkScrollableFrame get dramatically slower to build/destroy as row count
+# grows — a real 247-row rebuild measured ~63s. Pagination keeps the
+# rendered widget count bounded regardless of how many addresses exist.
+PAGE_SIZE = 25
+
 
 class AddressesView(ctk.CTkFrame):
     def __init__(self, master, app, **kwargs):
@@ -60,7 +67,10 @@ class AddressesView(ctk.CTkFrame):
         self._state_filter = (
             app.app_state.addresses_filter if app.app_state.addresses_filter in STATE_FILTERS else "All"
         )
-        self._checkbox_vars = {}  # email -> BooleanVar, persists across refreshes
+        self._page = 0
+        self._selected = set()  # emails selected, independent of pagination
+        self._last_filtered_emails = []  # all emails matching the current filter/search (not just this page)
+        self._select_labels = {}  # email -> the rendered "select" cell label, current page only
         self._build()
 
     def _build(self):
@@ -178,24 +188,49 @@ class AddressesView(ctk.CTkFrame):
         self.local_table = SimpleTable(parent, LOCAL_COLUMNS)
         self.local_table.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
+        pagination_row = ctk.CTkFrame(parent, fg_color="transparent")
+        pagination_row.pack(fill="x", padx=4, pady=(4, 0))
+        self.prev_page_btn = SecondaryButton(
+            pagination_row, text="◀ Prev", width=80, height=26, command=self._prev_page,
+        )
+        self.prev_page_btn.pack(side="left")
+        self.page_label = ctk.CTkLabel(pagination_row, text="", text_color=theme.TEXT_SECONDARY)
+        self.page_label.pack(side="left", padx=12)
+        self.next_page_btn = SecondaryButton(
+            pagination_row, text="Next ▶", width=80, height=26, command=self._next_page,
+        )
+        self.next_page_btn.pack(side="left")
+
         self.local_status = ctk.CTkLabel(parent, text="", text_color=theme.TEXT_SECONDARY)
         self.local_status.pack(anchor="w", padx=4, pady=(4, 0))
 
     def _schedule_refresh_local(self):
+        self._page = 0
         if self._search_after_id is not None:
             self.after_cancel(self._search_after_id)
         self._search_after_id = self.after(200, self._refresh_local)
 
     def _set_state_filter(self, key):
         self._state_filter = key
+        self._page = 0
         self.app.app_state.addresses_filter = key
         self.app.app_state.save()
         self._refresh_local()
 
     def _on_sort_changed(self):
         sort_key = SORT_LABEL_TO_KEY.get(self.sort_var.get(), backend.SORT_CREATED_DESC)
+        self._page = 0
         self.app.app_state.addresses_sort = sort_key
         self.app.app_state.save()
+        self._refresh_local()
+
+    def _prev_page(self):
+        if self._page > 0:
+            self._page -= 1
+            self._refresh_local()
+
+    def _next_page(self):
+        self._page += 1
         self._refresh_local()
 
     def _refresh_local(self):
@@ -217,7 +252,7 @@ class AddressesView(ctk.CTkFrame):
             }
             latest_updated = conn.execute("SELECT MAX(updated_at) FROM addresses").fetchone()[0]
             state = None if self._state_filter == "All" else self._state_filter
-            items = backend.list_addresses_full(conn, state=state, sort=sort_key, limit=500)
+            items = backend.list_addresses_full(conn, state=state, sort=sort_key, limit=5000)
         finally:
             conn.close()
 
@@ -228,8 +263,18 @@ class AddressesView(ctk.CTkFrame):
                 if query in (r["email"] or "").lower() or query in (r["label"] or "").lower()
             ]
 
-        visible_emails = {i["email"] for i in items}
-        self._checkbox_vars = {e: v for e, v in self._checkbox_vars.items() if e in visible_emails}
+        total = len(items)
+        page_count = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self._page = max(0, min(self._page, page_count - 1))
+        start = self._page * PAGE_SIZE
+        page_items = items[start:start + PAGE_SIZE]
+
+        self._last_filtered_emails = [i["email"] for i in items]
+        full_emails = set(self._last_filtered_emails)
+        self._selected &= full_emails  # drop selections no longer matching the filter
+
+        page_emails = {i["email"] for i in page_items}
+        self._select_labels = {e: v for e, v in self._select_labels.items() if e in page_emails}
 
         for key, btn in self._badge_buttons.items():
             active = self._state_filter == key
@@ -243,23 +288,37 @@ class AddressesView(ctk.CTkFrame):
         )
 
         self.local_table.set_rows(
-            items, cell_builder=self._local_cell,
+            page_items, cell_builder=self._local_cell,
             empty_text="No local addresses yet — generate or sync some.",
         )
-        self.local_status.configure(text=f"{len(items)} address(es)")
+        self.select_all_var.set(bool(full_emails) and full_emails.issubset(self._selected))
+        self.prev_page_btn.configure(state="normal" if self._page > 0 else "disabled")
+        self.next_page_btn.configure(state="normal" if self._page < page_count - 1 else "disabled")
+        if total:
+            self.page_label.configure(
+                text=f"Page {self._page + 1} of {page_count}  ·  "
+                     f"{start + 1}–{min(start + PAGE_SIZE, total)} of {total}"
+            )
+        else:
+            self.page_label.configure(text="")
+        self.local_status.configure(text=f"{total} address(es)")
         self._update_bulk_bar()
 
     def _local_cell(self, row_index, col_index, key, row):
         if key == "select":
+            # A plain clickable label instead of CTkCheckBox — measured 3-5x
+            # cheaper to build/destroy per row, which matters a lot once
+            # you're rendering dozens of these per page (see PAGE_SIZE note).
             email = row["email"]
-            var = self._checkbox_vars.get(email)
-            if var is None:
-                var = ctk.BooleanVar(value=False)
-                self._checkbox_vars[email] = var
-            return ctk.CTkCheckBox(
-                self.local_table, text="", variable=var, width=20,
-                checkbox_width=18, checkbox_height=18, command=self._update_bulk_bar,
+            checked = email in self._selected
+            lbl = ctk.CTkLabel(
+                self.local_table, text="✓" if checked else "", width=20, height=20,
+                cursor="hand2", corner_radius=4, text_color="#ffffff",
+                fg_color=theme.ACCENT if checked else theme.BG_INPUT,
             )
+            lbl.bind("<Button-1>", lambda _e, email=email, lbl=lbl: self._toggle_row_selection(email, lbl))
+            self._select_labels[email] = lbl
+            return lbl
         if key == "label":
             return SecondaryButton(
                 self.local_table, text=row["label"] or "(no label)", anchor="w",
@@ -268,14 +327,15 @@ class AddressesView(ctk.CTkFrame):
                 command=lambda email=row["email"], label=row["label"]: self._edit_label(email, label),
             )
         if key == "state":
-            var = ctk.StringVar(value=row["state"])
-            menu = ctk.CTkOptionMenu(
-                self.local_table, values=list(backend.ADDRESS_STATES), variable=var,
-                width=100, height=26, fg_color=theme.BG_CARD_ALT, button_color=theme.BG_CARD_ALT,
-                button_hover_color=theme.SIDEBAR_HOVER,
-                command=lambda choice, email=row["email"]: self._set_state(email, choice),
+            # Same reasoning as "select" above — a clickable label with a
+            # native tk.Menu popup instead of a persistent CTkOptionMenu.
+            email = row["email"]
+            lbl = ctk.CTkLabel(
+                self.local_table, text=row["state"], cursor="hand2", width=90, height=26,
+                corner_radius=6, fg_color=theme.BG_CARD_ALT, text_color=theme.TEXT_PRIMARY,
             )
-            return menu
+            lbl.bind("<Button-1>", lambda e, email=email: self._open_state_menu(e, email))
+            return lbl
         if key == "created_at":
             return ctk.CTkLabel(
                 self.local_table, text=_format_ts(row["created_at"]), anchor="w",
@@ -290,8 +350,12 @@ class AddressesView(ctk.CTkFrame):
         return None
 
     # ---- selection / bulk actions --------------------------------------
+    # Selection (self._selected) is decoupled from which checkboxes are
+    # currently rendered, since only one page of rows exists as widgets at
+    # a time — bulk actions can span the whole filtered set, not just the
+    # visible page.
     def _selected_emails(self):
-        return [email for email, var in self._checkbox_vars.items() if var.get()]
+        return list(self._selected)
 
     def _update_bulk_bar(self):
         selected = self._selected_emails()
@@ -302,15 +366,33 @@ class AddressesView(ctk.CTkFrame):
         else:
             self.bulk_bar.pack_forget()
 
+    def _set_select_label(self, lbl, checked):
+        lbl.configure(
+            text="✓" if checked else "",
+            fg_color=theme.ACCENT if checked else theme.BG_INPUT,
+        )
+
+    def _toggle_row_selection(self, email, lbl):
+        if email in self._selected:
+            self._selected.discard(email)
+        else:
+            self._selected.add(email)
+        self._set_select_label(lbl, email in self._selected)
+        self._update_bulk_bar()
+
     def _on_select_all_toggle(self):
-        value = self.select_all_var.get()
-        for var in self._checkbox_vars.values():
-            var.set(value)
+        if self.select_all_var.get():
+            self._selected = set(self._last_filtered_emails)
+        else:
+            self._selected = set()
+        for email, lbl in self._select_labels.items():
+            self._set_select_label(lbl, email in self._selected)
         self._update_bulk_bar()
 
     def _clear_selection(self):
-        for var in self._checkbox_vars.values():
-            var.set(False)
+        self._selected = set()
+        for lbl in self._select_labels.values():
+            self._set_select_label(lbl, False)
         self.select_all_var.set(False)
         self._update_bulk_bar()
 
@@ -384,9 +466,17 @@ class AddressesView(ctk.CTkFrame):
             backend.delete_addresses(conn, selected)
         finally:
             conn.close()
-        for email in selected:
-            self._checkbox_vars.pop(email, None)
+        self._selected.clear()
         self._refresh_local()
+
+    def _open_state_menu(self, event, email):
+        menu = tk.Menu(self, tearoff=0)
+        for state in backend.ADDRESS_STATES:
+            menu.add_command(label=state, command=lambda s=state, email=email: self._set_state(email, s))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     def _set_state(self, email, new_state):
         conn = backend.connect_db(self.app.app_state.db_file)
