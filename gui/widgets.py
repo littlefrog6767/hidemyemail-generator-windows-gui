@@ -1,214 +1,208 @@
-"""Small reusable CustomTkinter building blocks shared by every tab."""
+"""Small reusable Qt building blocks shared by every tab."""
 
-import customtkinter as ctk
-
-from gui import theme
-
-
-class Card(ctk.CTkFrame):
-    def __init__(self, master, **kwargs):
-        kwargs.setdefault("fg_color", theme.BG_CARD)
-        kwargs.setdefault("corner_radius", 12)
-        kwargs.setdefault("border_width", 1)
-        kwargs.setdefault("border_color", theme.BORDER)
-        super().__init__(master, **kwargs)
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
+from PySide6.QtWidgets import (
+    QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
+)
 
 
-class PrimaryButton(ctk.CTkButton):
-    def __init__(self, master, **kwargs):
-        kwargs.setdefault("fg_color", theme.ACCENT)
-        kwargs.setdefault("hover_color", theme.ACCENT_HOVER)
-        kwargs.setdefault("text_color", "#ffffff")
-        kwargs.setdefault("corner_radius", 8)
-        kwargs.setdefault("font", (theme.FONT_FAMILY, 13, "bold"))
-        super().__init__(master, **kwargs)
+class PrimaryButton(QPushButton):
+    def __init__(self, text="", parent=None, **kwargs):
+        super().__init__(text, parent)
+        self.setProperty("variant", "primary")
+        self.setCursor(Qt.PointingHandCursor)
 
 
-class SecondaryButton(ctk.CTkButton):
-    def __init__(self, master, **kwargs):
-        kwargs.setdefault("fg_color", theme.BG_CARD_ALT)
-        kwargs.setdefault("hover_color", theme.SIDEBAR_HOVER)
-        kwargs.setdefault("text_color", theme.TEXT_PRIMARY)
-        kwargs.setdefault("corner_radius", 8)
-        kwargs.setdefault("border_width", 1)
-        kwargs.setdefault("border_color", theme.BORDER)
-        kwargs.setdefault("font", (theme.FONT_FAMILY, 12))
-        super().__init__(master, **kwargs)
+class SecondaryButton(QPushButton):
+    def __init__(self, text="", parent=None, **kwargs):
+        super().__init__(text, parent)
+        self.setProperty("variant", "secondary")
+        self.setCursor(Qt.PointingHandCursor)
 
 
-class DangerButton(ctk.CTkButton):
-    def __init__(self, master, **kwargs):
-        kwargs.setdefault("fg_color", theme.DANGER)
-        kwargs.setdefault("hover_color", theme.DANGER_HOVER)
-        kwargs.setdefault("text_color", "#ffffff")
-        kwargs.setdefault("corner_radius", 8)
-        kwargs.setdefault("font", (theme.FONT_FAMILY, 12))
-        super().__init__(master, **kwargs)
+class DangerButton(QPushButton):
+    def __init__(self, text="", parent=None, **kwargs):
+        super().__init__(text, parent)
+        self.setProperty("variant", "danger")
+        self.setCursor(Qt.PointingHandCursor)
 
 
-class StatusPill(ctk.CTkFrame):
-    def __init__(self, master, text="", color=theme.TEXT_MUTED, **kwargs):
-        super().__init__(master, fg_color="transparent", **kwargs)
-        self.dot = ctk.CTkLabel(self, text="●", text_color=color, font=(theme.FONT_FAMILY, 10))
-        self.dot.pack(side="left", padx=(0, 6))
-        self.label = ctk.CTkLabel(self, text=text, text_color=theme.TEXT_SECONDARY, font=(theme.FONT_FAMILY, 11))
-        self.label.pack(side="left")
+class PillButton(QPushButton):
+    """A checkable, pill-shaped filter button (All/Unused/Used/Trash)."""
 
-    def set(self, text, color):
-        self.dot.configure(text_color=color)
-        self.label.configure(text=text)
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setProperty("variant", "pill")
+        self.setCursor(Qt.PointingHandCursor)
+
+    def set_active(self, active: bool):
+        self.setProperty("active", "true" if active else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
 
 
-class PromptDialog(ctk.CTkToplevel):
+def make_label(text="", variant=None, parent=None):
+    lbl = QLabel(text, parent)
+    if variant:
+        lbl.setProperty("variant", variant)
+    return lbl
+
+
+class Card(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Card")
+
+
+class PromptDialog(QDialog):
     """Small modal for editing a single line of text (e.g. a label), used
     for both single-row and bulk edits. Calls on_submit(value) once the
     user confirms; does nothing on cancel/close."""
 
-    def __init__(self, master, title, message, initial="", on_submit=None, **kwargs):
-        super().__init__(master, **kwargs)
-        self.title(title)
-        self.geometry("420x180")
-        self.resizable(False, False)
-        self.configure(fg_color=theme.BG_MAIN)
-        self.transient(master)
+    def __init__(self, parent, title, message, initial="", on_submit=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setFixedSize(420, 180)
         self._on_submit = on_submit
 
-        ctk.CTkLabel(
-            self, text=message, text_color=theme.TEXT_SECONDARY, wraplength=380, justify="left",
-        ).pack(anchor="w", padx=20, pady=(20, 8))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        msg = QLabel(message)
+        msg.setProperty("variant", "secondary")
+        msg.setWordWrap(True)
+        layout.addWidget(msg)
 
-        self.entry_var = ctk.StringVar(value=initial)
-        entry = ctk.CTkEntry(
-            self, textvariable=self.entry_var, fg_color=theme.BG_INPUT, border_color=theme.BORDER,
-        )
-        entry.pack(fill="x", padx=20, pady=(0, 16))
-        entry.bind("<Return>", lambda _e: self._submit())
-        entry.focus_set()
-        entry.select_range(0, "end")
+        self.entry = QLineEdit(initial)
+        self.entry.returnPressed.connect(self._submit)
+        layout.addWidget(self.entry)
+        layout.addStretch()
 
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(padx=20, fill="x")
-        PrimaryButton(btn_row, text="Save", command=self._submit).pack(side="left")
-        SecondaryButton(btn_row, text="Cancel", command=self.destroy).pack(side="left", padx=(10, 0))
+        btn_row = QHBoxLayout()
+        save_btn = PrimaryButton("Save")
+        save_btn.clicked.connect(self._submit)
+        cancel_btn = SecondaryButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
 
-        self.after(50, self.grab_set)
+        self.entry.setFocus()
+        self.entry.selectAll()
 
     def _submit(self):
-        value = self.entry_var.get().strip()
-        self.destroy()
+        value = self.entry.text().strip()
+        self.accept()
         if self._on_submit is not None:
             self._on_submit(value)
 
 
-class SimpleTable(ctk.CTkScrollableFrame):
-    """A minimal scrollable grid table: header row + data rows.
+class DictTableModel(QAbstractTableModel):
+    """A model backed by a plain list of dicts — genuinely virtualized (Qt
+    only ever asks for the rows currently on screen), replacing the old
+    CustomTkinter SimpleTable that had to build/destroy real widgets for
+    every row on every refresh.
 
-    columns: list of (key, heading, weight) tuples.
-    Call set_rows(rows, cell_builder) to (re)populate. cell_builder, if given,
-    is called as cell_builder(row_index, col_index, key, row_dict) and may
-    return a widget for that cell (e.g. a dropdown or button row); returning
-    None falls back to a plain text label using row_dict[key].
+    columns: list of (key, heading) tuples.
+    row_id_key: dict key used to identify a row uniquely (e.g. "email"),
+      needed to track checked state / selection across a fresh set_rows().
+    checkable_key: if set, that column renders as a checkbox instead of text.
+    formatters: {key: fn(value, row_dict) -> display string}
     """
 
-    def __init__(self, master, columns, on_header_click=None, sortable_keys=None, **kwargs):
-        kwargs.setdefault("fg_color", theme.BG_INPUT)
-        kwargs.setdefault("corner_radius", 10)
-        super().__init__(master, **kwargs)
+    def __init__(self, columns, row_id_key=None, checkable_key=None, formatters=None, parent=None):
+        super().__init__(parent)
         self.columns = columns
-        self._on_header_click = on_header_click
-        self._sortable_keys = set(sortable_keys) if sortable_keys is not None else {c[0] for c in columns}
-        self._column_headings = {key: heading for key, heading, _ in columns}
-        self._header_widgets_by_key = {}
-        for i, (_, _, weight) in enumerate(columns):
-            self.grid_columnconfigure(i, weight=weight)
-        self._header_widgets = []
-        self._data_rows = []
-        self._rendered_key = None
-        self._build_header()
+        self.row_id_key = row_id_key
+        self.checkable_key = checkable_key
+        self.formatters = formatters or {}
+        self._rows = []
+        self._checked = set()
 
-    @staticmethod
-    def _rows_key(rows):
-        """A hashable fingerprint of the rendered data. Cell widgets built by
-        cell_builder are a pure function of (row_index, col_index, key, row),
-        so identical rows always render identically — safe to skip the
-        rebuild entirely when nothing changed."""
-        try:
-            key = tuple(tuple(sorted(row.items())) for row in rows)
-            hash(key)  # force the check — building the tuple alone won't raise
-        except TypeError:
-            return None  # unhashable value in a row — always rebuild
-        return key
+    def set_rows(self, rows):
+        checked_ids = self._checked if self.row_id_key else set()
+        self.beginResetModel()
+        self._rows = rows
+        if self.row_id_key:
+            valid_ids = {r.get(self.row_id_key) for r in rows}
+            self._checked = checked_ids & valid_ids
+        self.endResetModel()
 
-    def _build_header(self):
-        for i, (key, heading, _) in enumerate(self.columns):
-            sortable = self._on_header_click is not None and key in self._sortable_keys and heading
-            lbl = ctk.CTkLabel(
-                self,
-                text=heading,
-                anchor="w",
-                cursor="hand2" if sortable else "",
-                text_color=theme.TEXT_SECONDARY,
-                font=(theme.FONT_FAMILY, 11, "bold"),
-            )
-            lbl.grid(row=0, column=i, sticky="ew", padx=8, pady=(6, 10))
-            self._header_widgets.append(lbl)
-            self._header_widgets_by_key[key] = lbl
-            if sortable:
-                lbl.bind("<Button-1>", lambda _e, key=key: self._on_header_click(key))
+    def row_at(self, row_index):
+        return self._rows[row_index]
 
-    def set_sort_indicators(self, indicators):
-        """indicators: {key: 'asc'|'desc'} for every header that should show
-        an arrow right now (supports more than one active at once, e.g. a
-        primary state grouping plus a secondary label/date sort). Any header
-        not in the dict shows its plain heading with no arrow."""
-        for key, lbl in self._header_widgets_by_key.items():
-            base = self._column_headings.get(key, "")
-            direction = indicators.get(key)
-            if direction and base:
-                arrow = "▲" if direction == "asc" else "▼"
-                lbl.configure(text=f"{base} {arrow}")
+    def all_rows(self):
+        return list(self._rows)
+
+    def checked_ids(self):
+        return set(self._checked)
+
+    def set_checked_ids(self, ids):
+        self._checked = set(ids)
+        if self._rows:
+            col = self._column_index(self.checkable_key)
+            if col is not None:
+                self.dataChanged.emit(
+                    self.index(0, col), self.index(len(self._rows) - 1, col), [Qt.CheckStateRole]
+                )
+
+    def _column_index(self, key):
+        for i, (k, _) in enumerate(self.columns):
+            if k == key:
+                return i
+        return None
+
+    # -- QAbstractTableModel overrides --
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.columns)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            return self.columns[section][1]
+        return None
+
+    def flags(self, index):
+        base = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        key = self.columns[index.column()][0]
+        if key == self.checkable_key:
+            base |= Qt.ItemIsUserCheckable
+        return base
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        key = self.columns[index.column()][0]
+
+        if role == Qt.CheckStateRole and key == self.checkable_key:
+            row_id = row.get(self.row_id_key)
+            return Qt.Checked if row_id in self._checked else Qt.Unchecked
+
+        if role == Qt.DisplayRole:
+            if key == self.checkable_key:
+                return ""
+            value = row.get(key, "")
+            fmt = self.formatters.get(key)
+            if fmt:
+                return fmt(value, row)
+            return str(value) if value is not None else ""
+
+        return None
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if role == Qt.CheckStateRole:
+            key = self.columns[index.column()][0]
+            if key != self.checkable_key or not self.row_id_key:
+                return False
+            row = self._rows[index.row()]
+            row_id = row.get(self.row_id_key)
+            if value == Qt.Checked.value or value == Qt.Checked:
+                self._checked.add(row_id)
             else:
-                lbl.configure(text=base)
-
-    def clear_rows(self):
-        for widgets in self._data_rows:
-            for w in widgets:
-                w.destroy()
-        self._data_rows = []
-
-    def set_rows(self, rows, cell_builder=None, empty_text="Nothing here yet."):
-        key = self._rows_key(rows)
-        if key is not None and key == self._rendered_key:
-            return
-        self._rendered_key = key
-        self.clear_rows()
-        for r, row in enumerate(rows, start=1):
-            row_widgets = []
-            for c, (key, _, _) in enumerate(self.columns):
-                widget = cell_builder(r - 1, c, key, row) if cell_builder else None
-                if widget is None:
-                    value = row.get(key, "")
-                    widget = ctk.CTkLabel(
-                        self,
-                        text=str(value if value is not None else ""),
-                        anchor="w",
-                        text_color=theme.TEXT_PRIMARY,
-                        font=(theme.FONT_FAMILY, 12),
-                    )
-                widget.grid(row=r, column=c, sticky="ew", padx=8, pady=4)
-                row_widgets.append(widget)
-            self._data_rows.append(row_widgets)
-        if not rows:
-            empty = ctk.CTkLabel(
-                self, text=empty_text, text_color=theme.TEXT_MUTED, font=(theme.FONT_FAMILY, 12)
-            )
-            empty.grid(row=1, column=0, columnspan=len(self.columns), sticky="w", padx=8, pady=14)
-            self._data_rows.append([empty])
-
-        # Tk defers a chunk of layout/mapping work for newly-placed widgets
-        # until the container is actually raised to the front again — which
-        # otherwise shows up as an unrelated-feeling stutter the next time
-        # this tab is switched to, on top of the rebuild cost already paid
-        # here. Forcing it now keeps that cost attributed to this rebuild
-        # instead of surfacing later as a second, seemingly random one.
-        self.update_idletasks()
+                self._checked.discard(row_id)
+            self.dataChanged.emit(index, index, [role])
+            return True
+        return False

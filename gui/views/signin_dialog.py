@@ -2,128 +2,122 @@
 request (raw Cookie header, or a browser 'Copy as cURL'), pastes it here, and
 we validate it against iCloud before saving it locally."""
 
-import customtkinter as ctk
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import (
+    QButtonGroup, QDialog, QHBoxLayout, QTextEdit, QVBoxLayout,
+)
 
-from gui import backend, theme
-from gui.widgets import PrimaryButton, SecondaryButton
+from gui import backend
+from gui.widgets import PillButton, PrimaryButton, SecondaryButton, make_label
 
 
-class SignInDialog(ctk.CTkToplevel):
-    def __init__(self, master, app):
-        super().__init__(master)
+class SignInDialog(QDialog):
+    def __init__(self, parent, app):
+        super().__init__(parent)
         self.app = app
-        self.title("Sign in to iCloud")
-        self.geometry("580x600")
-        self.configure(fg_color=theme.BG_MAIN)
-        self.resizable(False, False)
-        self.transient(master)
+        self.setWindowTitle("Sign in to iCloud")
+        self.setFixedSize(580, 600)
         self._build()
-        self.after(50, self.grab_set)
 
     def _build(self):
-        pad = {"padx": 24}
-        ctk.CTkLabel(
-            self,
-            text="Connect your iCloud account",
-            font=(theme.FONT_FAMILY, 18, "bold"),
-            text_color=theme.TEXT_PRIMARY,
-        ).pack(anchor="w", pady=(22, 6), **pad)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(10)
 
-        ctk.CTkLabel(
-            self,
-            text=(
-                "1. Sign in at icloud.com/settings (icloud.com.cn for China) in your browser.\n"
-                "2. Open DevTools (F12) → Network tab, then refresh the page.\n"
-                "3. Filter requests for \"hme\" or \"maildomainws\".\n"
-                "4. Right-click a matching request → Copy → Copy as cURL.\n"
-                "5. Paste the whole copied text below. A raw Cookie header also works.\n\n"
-                "Avoid feedbackws/reportStats requests — they're usually missing the\n"
-                "X-APPLE-WEBAUTH-USER cookie this needs."
-            ),
-            justify="left",
-            anchor="w",
-            text_color=theme.TEXT_SECONDARY,
-            font=(theme.FONT_FAMILY, 12),
-        ).pack(anchor="w", pady=(0, 14), **pad)
+        heading = make_label("Connect your iCloud account")
+        heading.setStyleSheet("font-size: 18px; font-weight: 700;")
+        layout.addWidget(heading)
 
-        region_row = ctk.CTkFrame(self, fg_color="transparent")
-        region_row.pack(anchor="w", fill="x", pady=(0, 12), **pad)
-        ctk.CTkLabel(region_row, text="Region", text_color=theme.TEXT_SECONDARY).pack(
-            side="left", padx=(0, 10)
+        instructions = make_label(
+            "1. Sign in at icloud.com/settings (icloud.com.cn for China) in your browser.\n"
+            "2. Open DevTools (F12) → Network tab, then refresh the page.\n"
+            "3. Filter requests for \"hme\" or \"maildomainws\".\n"
+            "4. Right-click a matching request → Copy → Copy as cURL.\n"
+            "5. Paste the whole copied text below. A raw Cookie header also works.\n\n"
+            "Avoid feedbackws/reportStats requests — they're usually missing the\n"
+            "X-APPLE-WEBAUTH-USER cookie this needs.",
+            variant="secondary",
         )
-        self.region_var = ctk.StringVar(value=self.app.app_state.region)
-        ctk.CTkSegmentedButton(
-            region_row,
-            values=["global", "china"],
-            variable=self.region_var,
-            fg_color=theme.BG_INPUT,
-            selected_color=theme.ACCENT,
-            selected_hover_color=theme.ACCENT_HOVER,
-            unselected_color=theme.BG_INPUT,
-        ).pack(side="left")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
 
-        self.text_box = ctk.CTkTextbox(
-            self,
-            height=200,
-            fg_color=theme.BG_INPUT,
-            border_width=1,
-            border_color=theme.BORDER,
-            corner_radius=8,
-        )
-        self.text_box.pack(fill="both", expand=True, pady=(0, 12), **pad)
+        region_row = QHBoxLayout()
+        region_row.addWidget(make_label("Region", variant="secondary"))
+        self._region = self.app.app_state.region
+        self._region_group = QButtonGroup(self)
+        self._region_group.setExclusive(True)
+        for value in ("global", "china"):
+            btn = PillButton(value)
+            btn.setCheckable(True)
+            btn.setChecked(value == self._region)
+            btn.set_active(value == self._region)
+            btn.clicked.connect(lambda _c=False, v=value: self._on_region_selected(v))
+            self._region_group.addButton(btn)
+            region_row.addWidget(btn)
+        region_row.addStretch()
+        layout.addLayout(region_row)
 
-        self.status_label = ctk.CTkLabel(
-            self,
-            text="",
-            text_color=theme.TEXT_SECONDARY,
-            wraplength=520,
-            justify="left",
-            anchor="w",
-        )
-        self.status_label.pack(anchor="w", fill="x", pady=(0, 10), **pad)
+        self.text_box = QTextEdit()
+        self.text_box.setFixedHeight(200)
+        layout.addWidget(self.text_box)
 
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(0, 22), **pad)
-        self.validate_btn = PrimaryButton(
-            btn_row, text="Validate & Sign In", command=self._validate
-        )
-        self.validate_btn.pack(side="left")
-        SecondaryButton(btn_row, text="Cancel", command=self.destroy).pack(
-            side="left", padx=(10, 0)
-        )
+        self.status_label = make_label("", variant="secondary")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        layout.addStretch()
+
+        btn_row = QHBoxLayout()
+        self.validate_btn = PrimaryButton("Validate & Sign In")
+        self.validate_btn.clicked.connect(self._validate)
+        cancel_btn = SecondaryButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self.validate_btn)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    def _on_region_selected(self, value):
+        self._region = value
+        for btn in self._region_group.buttons():
+            btn.set_active(btn.text() == value)
+
+    def _set_status(self, text, variant):
+        self.status_label.setText(text)
+        self.status_label.setProperty("variant", variant)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
 
     def _validate(self):
-        text = self.text_box.get("1.0", "end").strip()
+        text = self.text_box.toPlainText().strip()
         if not text:
-            self.status_label.configure(
-                text="Paste your cookie / cURL text first.", text_color=theme.DANGER
-            )
+            self._set_status("Paste your cookie / cURL text first.", "danger")
             return
-        region = self.region_var.get()
-        self.validate_btn.configure(state="disabled", text="Validating…")
-        self.status_label.configure(text="Contacting iCloud…", text_color=theme.TEXT_SECONDARY)
+        region = self._region
+        self.validate_btn.setEnabled(False)
+        self.validate_btn.setText("Validating…")
+        self._set_status("Contacting iCloud…", "secondary")
         self.app.worker.run_coro(
             backend.validate_and_fetch_account(text, region),
             on_done=lambda v, e: self._on_result(v, e, text, region),
         )
 
     def _on_result(self, result, error, raw_text, region):
-        if not self.winfo_exists():
+        if not self.isVisible():
             return
-        self.validate_btn.configure(state="normal", text="Validate & Sign In")
+        self.validate_btn.setEnabled(True)
+        self.validate_btn.setText("Validate & Sign In")
         if error is not None:
-            self.status_label.configure(text=f"Error: {error}", text_color=theme.DANGER)
+            self._set_status(f"Error: {error}", "danger")
             return
         if not result["ok"]:
-            self.status_label.configure(text=result["error"], text_color=theme.DANGER)
+            self._set_status(result["error"], "danger")
             return
 
         backend.save_cookie_text(self.app.app_state.cookie_file, raw_text)
         self.app.app_state.region = region
         self.app.app_state.account = result["account"]
         self.app.app_state.save()
-        self.status_label.configure(
-            text=f"Signed in as {result['account']['apple_id']}.", text_color=theme.SUCCESS
-        )
+        self._set_status(f"Signed in as {result['account']['apple_id']}.", "success")
         self.app.on_signed_in(result["account"])
-        self.after(700, self.destroy)
+        QTimer.singleShot(700, self.accept)

@@ -3,10 +3,13 @@ and automatically resuming when Apple rate-limits creation."""
 
 import time
 
-import customtkinter as ctk
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import (
+    QGridLayout, QHBoxLayout, QLineEdit, QProgressBar, QTextEdit, QVBoxLayout, QWidget,
+)
 
-from gui import backend, theme
-from gui.widgets import Card, PrimaryButton, SecondaryButton, DangerButton
+from gui import backend
+from gui.widgets import Card, DangerButton, PrimaryButton, SecondaryButton, make_label
 
 APPLE_MAX_PER_WINDOW = 5  # Apple allows at most 5 Hide My Email creations per 30 min
 DEFAULT_BATCH_SIZE = APPLE_MAX_PER_WINDOW
@@ -15,9 +18,9 @@ DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 30
 MAX_BACKOFF_SECONDS = 300
 
 
-class SchedulerView(ctk.CTkFrame):
-    def __init__(self, master, app, **kwargs):
-        super().__init__(master, fg_color="transparent", **kwargs)
+class SchedulerView(QWidget):
+    def __init__(self, app):
+        super().__init__()
         self.app = app
         self._running = False
         self._paused = False
@@ -30,130 +33,124 @@ class SchedulerView(ctk.CTkFrame):
         self._waiting = False
         self._wait_deadline = 0.0
         self._wait_reason = ""
+        self._wait_variant = "secondary"
         self._build()
 
     def _build(self):
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=28, pady=(28, 10))
-        ctk.CTkLabel(
-            header, text="Scheduler", font=(theme.FONT_FAMILY, 22, "bold"),
-            text_color=theme.TEXT_PRIMARY,
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            header,
-            text="Generate a larger batch over time. Pauses and resumes automatically when Apple rate-limits creation.",
-            text_color=theme.TEXT_SECONDARY,
-        ).pack(anchor="w", pady=(2, 0))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setSpacing(10)
 
-        card = Card(self)
-        card.pack(fill="x", padx=28, pady=10)
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=22, pady=20)
-        inner.grid_columnconfigure(1, weight=1)
-        inner.grid_columnconfigure(3, weight=1)
+        layout.addWidget(make_label("Scheduler", variant="heading"))
+        layout.addWidget(make_label(
+            "Generate a larger batch over time. Pauses and resumes automatically "
+            "when Apple rate-limits creation.",
+            variant="secondary",
+        ))
 
-        ctk.CTkLabel(
-            inner, text="BATCH DETAILS", text_color=theme.TEXT_SECONDARY,
-            font=(theme.FONT_FAMILY, 11, "bold"),
-        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
-        ctk.CTkLabel(
-            inner,
-            text=f"Apple allows at most {APPLE_MAX_PER_WINDOW} new addresses per 30 minutes, "
-                 "so batch size is capped accordingly. You control the delay between batches.",
-            text_color=theme.TEXT_MUTED, font=(theme.FONT_FAMILY, 11), wraplength=560, justify="left",
-        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 12))
+        card = Card()
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(22, 20, 22, 20)
+        inner = QGridLayout()
+        inner.setVerticalSpacing(6)
+        inner.setColumnStretch(1, 1)
+        inner.setColumnStretch(3, 1)
+        card_layout.addLayout(inner)
 
-        ctk.CTkLabel(inner, text="Label", text_color=theme.TEXT_SECONDARY).grid(
-            row=2, column=0, sticky="w", pady=6
+        inner.addWidget(make_label("BATCH DETAILS", variant="section"), 0, 0, 1, 4)
+        note = make_label(
+            f"Apple allows at most {APPLE_MAX_PER_WINDOW} new addresses per 30 minutes, "
+            "so batch size is capped accordingly. You control the delay between batches.",
+            variant="muted",
         )
-        self.label_var = ctk.StringVar(value="scheduled")
-        ctk.CTkEntry(
-            inner, textvariable=self.label_var, fg_color=theme.BG_INPUT, border_color=theme.BORDER,
-        ).grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        note.setWordWrap(True)
+        inner.addWidget(note, 1, 0, 1, 4)
 
-        ctk.CTkLabel(inner, text="Total quantity", text_color=theme.TEXT_SECONDARY).grid(
-            row=2, column=1, sticky="w", pady=6, padx=(18, 0)
-        )
-        self.target_var = ctk.StringVar(value="25")
-        ctk.CTkEntry(
-            inner, textvariable=self.target_var, fg_color=theme.BG_INPUT, border_color=theme.BORDER,
-        ).grid(row=3, column=1, sticky="ew", pady=(0, 6), padx=(18, 0))
+        inner.addWidget(make_label("Label", variant="secondary"), 2, 0)
+        self.label_entry = QLineEdit("scheduled")
+        inner.addWidget(self.label_entry, 3, 0)
 
-        ctk.CTkLabel(
-            inner, text=f"Batch size (max {APPLE_MAX_PER_WINDOW})", text_color=theme.TEXT_SECONDARY,
-        ).grid(row=2, column=2, sticky="w", pady=6, padx=(18, 0))
-        self.batch_var = ctk.StringVar(value=str(DEFAULT_BATCH_SIZE))
-        ctk.CTkEntry(
-            inner, textvariable=self.batch_var, fg_color=theme.BG_INPUT, border_color=theme.BORDER,
-        ).grid(row=3, column=2, sticky="ew", pady=(0, 6), padx=(18, 0))
+        inner.addWidget(make_label("Total quantity", variant="secondary"), 2, 1)
+        self.target_entry = QLineEdit("25")
+        inner.addWidget(self.target_entry, 3, 1)
 
-        ctk.CTkLabel(inner, text="Delay between batches (min)", text_color=theme.TEXT_SECONDARY).grid(
-            row=2, column=3, sticky="w", pady=6, padx=(18, 0)
-        )
-        self.delay_var = ctk.StringVar(value=str(DEFAULT_BATCH_DELAY_MINUTES))
-        ctk.CTkEntry(
-            inner, textvariable=self.delay_var, fg_color=theme.BG_INPUT, border_color=theme.BORDER,
-        ).grid(row=3, column=3, sticky="ew", pady=(0, 6), padx=(18, 0))
+        inner.addWidget(make_label(f"Batch size (max {APPLE_MAX_PER_WINDOW})", variant="secondary"), 2, 2)
+        self.batch_entry = QLineEdit(str(DEFAULT_BATCH_SIZE))
+        inner.addWidget(self.batch_entry, 3, 2)
 
-        self.progress_bar = ctk.CTkProgressBar(inner, fg_color=theme.BG_INPUT, progress_color=theme.ACCENT)
-        self.progress_bar.set(0)
-        self.progress_bar.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(14, 6))
+        inner.addWidget(make_label("Delay between batches (min)", variant="secondary"), 2, 3)
+        self.delay_entry = QLineEdit(str(DEFAULT_BATCH_DELAY_MINUTES))
+        inner.addWidget(self.delay_entry, 3, 3)
 
-        self.progress_label = ctk.CTkLabel(inner, text="Not started.", text_color=theme.TEXT_SECONDARY)
-        self.progress_label.grid(row=5, column=0, columnspan=4, sticky="w")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        inner.addWidget(self.progress_bar, 4, 0, 1, 4)
 
-        btn_row = ctk.CTkFrame(inner, fg_color="transparent")
-        btn_row.grid(row=6, column=0, columnspan=4, sticky="w", pady=(14, 0))
-        self.start_btn = PrimaryButton(btn_row, text="Start", command=self._start)
-        self.start_btn.pack(side="left")
-        self.pause_btn = SecondaryButton(btn_row, text="Pause", command=self._toggle_pause, state="disabled")
-        self.pause_btn.pack(side="left", padx=(10, 0))
-        self.cancel_btn = DangerButton(btn_row, text="Cancel", command=self._cancel, state="disabled")
-        self.cancel_btn.pack(side="left", padx=(10, 0))
+        self.progress_label = make_label("Not started.", variant="secondary")
+        inner.addWidget(self.progress_label, 5, 0, 1, 4)
 
-        log_card = Card(self)
-        log_card.pack(fill="both", expand=True, padx=28, pady=(0, 28))
-        ctk.CTkLabel(
-            log_card, text="ACTIVITY LOG", text_color=theme.TEXT_SECONDARY,
-            font=(theme.FONT_FAMILY, 11, "bold"),
-        ).pack(anchor="w", padx=18, pady=(14, 4))
-        self.log_box = ctk.CTkTextbox(
-            log_card, fg_color=theme.BG_INPUT, border_width=1, border_color=theme.BORDER,
-            corner_radius=8,
-        )
-        self.log_box.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        self.log_box.configure(state="disabled")
+        btn_row = QHBoxLayout()
+        self.start_btn = PrimaryButton("Start")
+        self.start_btn.clicked.connect(self._start)
+        self.pause_btn = SecondaryButton("Pause")
+        self.pause_btn.clicked.connect(self._toggle_pause)
+        self.pause_btn.setEnabled(False)
+        self.cancel_btn = DangerButton("Cancel")
+        self.cancel_btn.clicked.connect(self._cancel)
+        self.cancel_btn.setEnabled(False)
+        btn_row.addWidget(self.start_btn)
+        btn_row.addWidget(self.pause_btn)
+        btn_row.addWidget(self.cancel_btn)
+        btn_row.addStretch()
+        inner.addLayout(btn_row, 6, 0, 1, 4)
+
+        layout.addWidget(card)
+
+        log_card = Card()
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(18, 14, 18, 18)
+        log_layout.addWidget(make_label("ACTIVITY LOG", variant="section"))
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        log_layout.addWidget(self.log_box)
+        layout.addWidget(log_card, stretch=1)
 
     def _log(self, message):
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", message + "\n")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
+        self.log_box.append(message)
+
+    def _set_progress_text(self, text, variant):
+        self.progress_label.setText(text)
+        self.progress_label.setProperty("variant", variant)
+        self.progress_label.style().unpolish(self.progress_label)
+        self.progress_label.style().polish(self.progress_label)
 
     def _set_controls_running(self, running):
-        self.start_btn.configure(state="disabled" if running else "normal")
-        self.pause_btn.configure(state="normal" if running else "disabled", text="Pause")
-        self.cancel_btn.configure(state="normal" if running else "disabled")
+        self.start_btn.setEnabled(not running)
+        self.pause_btn.setEnabled(running)
+        self.pause_btn.setText("Pause")
+        self.cancel_btn.setEnabled(running)
 
     def _start(self):
         if not self.app.app_state.is_signed_in:
-            self.progress_label.configure(text="Sign in first.", text_color=theme.DANGER)
+            self._set_progress_text("Sign in first.", "danger")
             return
         try:
-            target = max(1, int(self.target_var.get()))
+            target = max(1, int(self.target_entry.text()))
         except ValueError:
             target = 1
         try:
-            batch_size = max(1, min(APPLE_MAX_PER_WINDOW, int(self.batch_var.get())))
+            batch_size = max(1, min(APPLE_MAX_PER_WINDOW, int(self.batch_entry.text())))
         except ValueError:
             batch_size = DEFAULT_BATCH_SIZE
         try:
-            delay_minutes = max(0, float(self.delay_var.get()))
+            delay_minutes = max(0, float(self.delay_entry.text()))
         except ValueError:
             delay_minutes = DEFAULT_BATCH_DELAY_MINUTES
-        self.target_var.set(str(target))
-        self.batch_var.set(str(batch_size))
-        self.delay_var.set(str(delay_minutes))
+        self.target_entry.setText(str(target))
+        self.batch_entry.setText(str(batch_size))
+        self.delay_entry.setText(str(delay_minutes))
 
         self._target = target
         self._delay_minutes = delay_minutes
@@ -165,10 +162,8 @@ class SchedulerView(ctk.CTkFrame):
         self._cancelled = False
         self._waiting = False
 
-        self.progress_bar.set(0)
-        self.log_box.configure(state="normal")
-        self.log_box.delete("1.0", "end")
-        self.log_box.configure(state="disabled")
+        self.progress_bar.setValue(0)
+        self.log_box.clear()
         self._log(
             f"Starting: {target} email(s) in batches of {batch_size}, "
             f"{delay_minutes:g} min between batches."
@@ -180,10 +175,10 @@ class SchedulerView(ctk.CTkFrame):
         if not self._running:
             return
         self._paused = not self._paused
-        self.pause_btn.configure(text="Resume" if self._paused else "Pause")
+        self.pause_btn.setText("Resume" if self._paused else "Pause")
         if self._paused:
             self._log("Paused by user.")
-            self.progress_label.configure(text="Paused.", text_color=theme.WARNING)
+            self._set_progress_text("Paused.", "warning")
         else:
             self._log("Resumed.")
             if self._waiting:
@@ -208,18 +203,16 @@ class SchedulerView(ctk.CTkFrame):
             return
 
         try:
-            batch_size = max(1, min(APPLE_MAX_PER_WINDOW, int(self.batch_var.get())))
+            batch_size = max(1, min(APPLE_MAX_PER_WINDOW, int(self.batch_entry.text())))
         except ValueError:
             batch_size = DEFAULT_BATCH_SIZE
         requested = min(batch_size, self._remaining)
         self._log(f"Generating batch of {requested}…")
-        self.progress_label.configure(
-            text=f"Generating… ({self._generated_total}/{self._target})", text_color=theme.TEXT_SECONDARY
-        )
+        self._set_progress_text(f"Generating… ({self._generated_total}/{self._target})", "secondary")
         self.app.worker.run_coro(
             backend.generate_emails(
-                self.app.app_state.cookie_file, self.app.app_state.region, self.label_var.get().strip() or "scheduled",
-                requested,
+                self.app.app_state.cookie_file, self.app.app_state.region,
+                self.label_entry.text().strip() or "scheduled", requested,
             ),
             on_done=lambda result, error: self._on_batch_done(result, error, requested),
         )
@@ -237,7 +230,7 @@ class SchedulerView(ctk.CTkFrame):
         got = len(result["emails"])
         self._generated_total += got
         self._remaining -= got
-        self.progress_bar.set(min(1.0, self._generated_total / self._target) if self._target else 0)
+        self.progress_bar.setValue(int(min(1.0, self._generated_total / self._target) * 1000) if self._target else 0)
         self.app.on_addresses_changed()
 
         if got >= requested and result["ok"]:
@@ -246,7 +239,7 @@ class SchedulerView(ctk.CTkFrame):
             if self._remaining <= 0:
                 self._finish(cancelled=False)
                 return
-            self._start_wait(self._delay_minutes * 60, "Waiting for next batch", theme.TEXT_SECONDARY)
+            self._start_wait(self._delay_minutes * 60, "Waiting for next batch", "secondary")
         else:
             err = result.get("error") or {}
             msg = err.get("message", "rate-limited")
@@ -254,9 +247,9 @@ class SchedulerView(ctk.CTkFrame):
                 f"Only {got}/{requested} generated ({msg}). Apple's limit was reached — "
                 f"stopping instead of hammering it, restarting the {self._delay_minutes:g} min timer."
             )
-            self._start_wait(self._delay_minutes * 60, "Apple's limit was reached", theme.WARNING)
+            self._start_wait(self._delay_minutes * 60, "Apple's limit was reached", "warning")
 
-    def _start_wait(self, delay_seconds, reason, color):
+    def _start_wait(self, delay_seconds, reason, variant):
         # Used both for the normal pause between successful batches and for
         # the rate-limit recovery pause — same mechanism, different message/
         # color. Restarts the full configured interval rather than a short
@@ -264,7 +257,7 @@ class SchedulerView(ctk.CTkFrame):
         self._waiting = True
         self._wait_deadline = time.monotonic() + delay_seconds
         self._wait_reason = reason
-        self._wait_color = color
+        self._wait_variant = variant
         self._tick_wait()
 
     def _tick_wait(self):
@@ -281,18 +274,18 @@ class SchedulerView(ctk.CTkFrame):
             self._run_batch()
             return
         mins, secs = divmod(int(remaining), 60)
-        self.progress_label.configure(
-            text=f"{self._wait_reason} — trying again in {mins:02d}:{secs:02d} "
-                 f"({self._generated_total}/{self._target})",
-            text_color=self._wait_color,
+        self._set_progress_text(
+            f"{self._wait_reason} — trying again in {mins:02d}:{secs:02d} "
+            f"({self._generated_total}/{self._target})",
+            self._wait_variant,
         )
-        self.after(1000, self._tick_wait)
+        QTimer.singleShot(1000, self._tick_wait)
 
     def _schedule_retry(self):
         delay = self._backoff_seconds
         self._backoff_seconds = min(MAX_BACKOFF_SECONDS, self._backoff_seconds * 1.5)
-        self.progress_label.configure(text=f"Retrying in {int(delay)}s…", text_color=theme.WARNING)
-        self.after(int(delay * 1000), self._run_batch)
+        self._set_progress_text(f"Retrying in {int(delay)}s…", "warning")
+        QTimer.singleShot(int(delay * 1000), self._run_batch)
 
     def _finish(self, cancelled):
         self._running = False
@@ -300,11 +293,11 @@ class SchedulerView(ctk.CTkFrame):
         self._set_controls_running(False)
         if cancelled:
             self._log(f"Cancelled. Generated {self._generated_total}/{self._target} total.")
-            self.progress_label.configure(
-                text=f"Cancelled — {self._generated_total}/{self._target} generated.", text_color=theme.WARNING
+            self._set_progress_text(
+                f"Cancelled — {self._generated_total}/{self._target} generated.", "warning"
             )
         else:
             self._log(f"Done. Generated {self._generated_total}/{self._target} total.")
-            self.progress_label.configure(
-                text=f"Done — {self._generated_total}/{self._target} generated.", text_color=theme.SUCCESS
+            self._set_progress_text(
+                f"Done — {self._generated_total}/{self._target} generated.", "success"
             )

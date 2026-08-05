@@ -1,6 +1,6 @@
 # HideMyEmail Generator — Windows GUI (unofficial)
 
-A CustomTkinter desktop GUI for Windows that mirrors the upstream project's
+A PySide6 (Qt) desktop GUI for Windows that mirrors the upstream project's
 native macOS app (Generate / Addresses / Inbox / Scheduler). It's a thin UI
 layer over the same Python CLI backend (`hidemyemail_generator`), vendored
 unmodified under `vendor/`. This isn't from the original project's author —

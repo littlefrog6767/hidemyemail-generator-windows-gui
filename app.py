@@ -1,17 +1,24 @@
 """HideMyEmail Generator — unofficial Windows GUI.
 
-A CustomTkinter front-end over the project's existing Python CLI backend
+A PySide6 (Qt) front-end over the project's existing Python CLI backend
 (vendored under vendor/hidemyemail_generator), mirroring the macOS app's
 Generate / Addresses / Inbox / Scheduler layout.
 """
 
 import os
+import sys
 from pathlib import Path
 
-import customtkinter as ctk
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
+    QStackedWidget, QVBoxLayout, QWidget,
+)
 
 from gui import theme
 from gui.async_worker import AsyncWorker
+from gui.qss import STYLESHEET
 from gui.state import AppState
 from gui.views.addresses_view import AddressesView
 from gui.views.generate_view import GenerateView
@@ -29,168 +36,136 @@ NAV_ITEMS = [
 ]
 
 
-class App(ctk.CTk):
+class App(QMainWindow):
     def __init__(self):
         super().__init__()
         self.app_state = AppState()
         self.worker = AsyncWorker(self)
 
-        self.title("HideMyEmail Generator")
-        self.minsize(1000, 680)
-        try:
-            self.geometry(self.app_state.window_geometry or "1360x900")
-        except Exception:
-            self.geometry("1360x900")
-        self.configure(fg_color=theme.BG_MAIN)
+        self.setWindowTitle("HideMyEmail Generator")
+        self.setMinimumSize(1000, 680)
+        self._restore_geometry()
         icon_path = ASSETS_DIR / "icon.ico"
         if icon_path.exists():
-            try:
-                self.iconbitmap(str(icon_path))
-            except Exception:
-                pass
-
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         self._nav_buttons = {}
         self._active_key = None
-        self._resize_after_id = None
-        self._resize_placeholder = None
-        self._build_sidebar()
-        self._build_content()
 
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        root = QWidget()
+        self.setCentralWidget(root)
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        root_layout.addWidget(self._build_sidebar())
+        root_layout.addWidget(self._build_content(), stretch=1)
+
         self._show("generate")
         self._refresh_account_pill()
-        self.bind("<Configure>", self._on_root_configure)
 
     # ---- sidebar ---------------------------------------------------
     def _build_sidebar(self):
-        sidebar = ctk.CTkFrame(self, fg_color=theme.BG_SIDEBAR, corner_radius=0, width=220)
-        sidebar.grid(row=0, column=0, sticky="nsw")
-        sidebar.grid_propagate(False)
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(220)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(18, 20, 18, 18)
+        layout.setSpacing(3)
 
-        title_row = ctk.CTkFrame(sidebar, fg_color="transparent")
-        title_row.pack(fill="x", padx=18, pady=(20, 18))
-        ctk.CTkLabel(
-            title_row, text="HideMyEmail", font=(theme.FONT_FAMILY, 15, "bold"),
-            text_color=theme.TEXT_PRIMARY,
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            title_row, text="Generator", font=(theme.FONT_FAMILY, 12), text_color=theme.TEXT_SECONDARY,
-        ).pack(anchor="w")
+        title = QLabel("HideMyEmail")
+        title.setObjectName("SidebarTitle")
+        layout.addWidget(title)
+        subtitle = QLabel("Generator")
+        subtitle.setObjectName("SidebarSubtitle")
+        layout.addWidget(subtitle)
+        layout.addSpacing(15)
 
         for key, label in NAV_ITEMS:
-            btn = ctk.CTkButton(
-                sidebar, text=label, anchor="w", corner_radius=8, height=38,
-                fg_color="transparent", hover_color=theme.SIDEBAR_HOVER,
-                text_color=theme.TEXT_PRIMARY, font=(theme.FONT_FAMILY, 13),
-                command=lambda k=key: self._show(k),
-            )
-            btn.pack(fill="x", padx=12, pady=3)
+            btn = QPushButton(label)
+            btn.setProperty("variant", "nav")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(38)
+            btn.clicked.connect(lambda _checked=False, k=key: self._show(k))
+            layout.addWidget(btn)
             self._nav_buttons[key] = btn
 
-        spacer = ctk.CTkFrame(sidebar, fg_color="transparent")
-        spacer.pack(fill="both", expand=True)
+        layout.addStretch()
 
-        bottom = ctk.CTkFrame(sidebar, fg_color="transparent")
-        bottom.pack(fill="x", padx=18, pady=(0, 18))
-        ctk.CTkLabel(
-            bottom, text="●  No telemetry collected", text_color=theme.TEXT_MUTED,
-            font=(theme.FONT_FAMILY, 10),
-        ).pack(anchor="w")
+        footer = QLabel("●  No telemetry collected")
+        footer.setObjectName("FooterLabel")
+        layout.addWidget(footer)
+        return sidebar
 
     def _select_nav(self, active_key):
         for key, btn in self._nav_buttons.items():
-            btn.configure(fg_color=theme.SIDEBAR_SELECTED if key == active_key else "transparent")
+            btn.setProperty("active", "true" if key == active_key else "false")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     # ---- content -----------------------------------------------------
     def _build_content(self):
-        outer = ctk.CTkFrame(self, fg_color=theme.BG_MAIN, corner_radius=0)
-        outer.grid(row=0, column=1, sticky="nsew")
-        outer.grid_rowconfigure(1, weight=1)
-        outer.grid_columnconfigure(0, weight=1)
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(20, 14, 20, 20)
+        outer_layout.setSpacing(10)
 
-        topbar = ctk.CTkFrame(outer, fg_color="transparent", height=48)
-        topbar.grid(row=0, column=0, sticky="ew", padx=20, pady=(14, 0))
-        self.account_btn = ctk.CTkButton(
-            topbar, text="Sign in", width=180, height=32, corner_radius=16,
-            fg_color=theme.BG_CARD_ALT, hover_color=theme.SIDEBAR_HOVER,
-            text_color=theme.TEXT_PRIMARY, font=(theme.FONT_FAMILY, 12),
-            command=self._on_account_button,
-        )
-        self.account_btn.pack(side="right")
+        topbar = QHBoxLayout()
+        topbar.addStretch()
+        self.account_btn = QPushButton("Sign in")
+        self.account_btn.setProperty("variant", "secondary")
+        self.account_btn.setCursor(Qt.PointingHandCursor)
+        self.account_btn.clicked.connect(self._on_account_button)
+        topbar.addWidget(self.account_btn)
+        outer_layout.addLayout(topbar)
 
-        container = ctk.CTkFrame(outer, fg_color="transparent")
-        container.grid(row=1, column=0, sticky="nsew")
-        container.grid_rowconfigure(0, weight=1)
-        container.grid_columnconfigure(0, weight=1)
-        self._content_container = container
+        self.stack = QStackedWidget()
+        outer_layout.addWidget(self.stack, stretch=1)
 
         self.views = {
-            "generate": GenerateView(container, self),
-            "addresses": AddressesView(container, self),
-            "inbox": InboxView(container, self),
-            "scheduler": SchedulerView(container, self),
+            "generate": GenerateView(self),
+            "addresses": AddressesView(self),
+            "inbox": InboxView(self),
+            "scheduler": SchedulerView(self),
         }
-        # Only the active view is ever gridded — the other three are fully
-        # unmapped (grid_remove), not just stacked behind via tkraise(). With
-        # all 4 simultaneously mapped, every CTk widget across all tabs (~380
-        # total) had to redraw its custom rounded-corner graphics on every
-        # single window resize tick, regardless of which tab was visible —
-        # measured at ~5s per resize step with a couple hundred addresses
-        # loaded, which is why resizing froze the whole app (and, with the
-        # Tk mainloop blocked that long repeatedly during a drag, the rest
-        # of the system too).
+        for view in self.views.values():
+            self.stack.addWidget(view)
 
-        # Both tabs' tables are rebuilt from scratch on refresh(), which is
-        # expensive (hundreds of widgets). Only do that when their data
-        # actually changed (tracked via on_addresses_changed / initial load),
-        # not on every nav click.
+        # Each view's table used to need manual pagination + a heavy set of
+        # workarounds under CustomTkinter (destroy/rebuild real widgets per
+        # row, resize freezing the whole app). Qt's model/view tables only
+        # ever render the rows actually on screen, so none of that carries
+        # over here. Still keep a lazy-refresh dirty flag purely to avoid
+        # redundant DB round-trips when nothing changed.
         self._dirty = {"addresses": True, "inbox": True}
+        return outer
 
     def _show(self, key):
-        previous = getattr(self, "_active_key", None)
-        if previous is not None and previous != key:
-            self.views[previous].grid_remove()
         self._active_key = key
-        self.views[key].grid(row=0, column=0, sticky="nsew")
+        self.stack.setCurrentWidget(self.views[key])
         self._select_nav(key)
         if key in self._dirty and self._dirty[key]:
             self.views[key].refresh()
             self._dirty[key] = False
 
-    # ---- resize handling -------------------------------------------------
-    # CTk widgets redraw their custom rounded-corner graphics on every
-    # ancestor resize event. With a couple hundred widgets in a tab (tables
-    # especially), that made a single resize tick cost several seconds —
-    # measured ~5s/tick with ~250 addresses loaded — freezing the app (and,
-    # since the Tk mainloop was blocked that long repeatedly during a drag,
-    # the rest of the system too). Unmapping the active view for the
-    # duration of the drag (showing a lightweight placeholder instead) cuts
-    # that to ~200ms/tick — measured directly, not assumed.
-    RESIZE_SETTLE_MS = 200
+    # ---- window geometry -------------------------------------------------
+    def _restore_geometry(self):
+        geo = self.app_state.window_geometry
+        if geo and isinstance(geo, list) and len(geo) == 4:
+            try:
+                x, y, w, h = geo
+                self.setGeometry(int(x), int(y), int(w), int(h))
+                return
+            except (TypeError, ValueError):
+                pass
+        self.resize(1360, 900)
 
-    def _on_root_configure(self, event):
-        if event.widget is not self:
-            return
-        if self._resize_after_id is None:
-            self._hide_for_resize()
-        else:
-            self.after_cancel(self._resize_after_id)
-        self._resize_after_id = self.after(self.RESIZE_SETTLE_MS, self._finish_resize)
-
-    def _hide_for_resize(self):
-        self.views[self._active_key].grid_remove()
-        self._resize_placeholder = ctk.CTkFrame(self._content_container, fg_color=theme.BG_MAIN)
-        self._resize_placeholder.grid(row=0, column=0, sticky="nsew")
-
-    def _finish_resize(self):
-        self._resize_after_id = None
-        if self._resize_placeholder is not None:
-            self._resize_placeholder.destroy()
-            self._resize_placeholder = None
-        self.views[self._active_key].grid(row=0, column=0, sticky="nsew")
+    def closeEvent(self, event):
+        rect = self.geometry()
+        self.app_state.window_geometry = [rect.x(), rect.y(), rect.width(), rect.height()]
+        self.app_state.save()
+        self.worker.shutdown()
+        super().closeEvent(event)
 
     # ---- account / sign-in --------------------------------------------
     def _on_account_button(self):
@@ -200,7 +175,8 @@ class App(ctk.CTk):
             self.open_signin_dialog()
 
     def open_signin_dialog(self):
-        SignInDialog(self, self)
+        dlg = SignInDialog(self, self)
+        dlg.exec()
 
     def on_signed_in(self, account):
         self._refresh_account_pill()
@@ -213,9 +189,9 @@ class App(ctk.CTk):
     def _refresh_account_pill(self):
         if self.app_state.is_signed_in and self.app_state.account:
             apple_id = self.app_state.account.get("apple_id", "Signed in")
-            self.account_btn.configure(text=f"☁  {apple_id}  (sign out)")
+            self.account_btn.setText(f"☁  {apple_id}  (sign out)")
         else:
-            self.account_btn.configure(text="☁  Sign in")
+            self.account_btn.setText("☁  Sign in")
 
     # ---- cross-view refresh --------------------------------------------
     def on_addresses_changed(self):
@@ -229,19 +205,14 @@ class App(ctk.CTk):
             else:
                 self._dirty[key] = True
 
-    def _on_close(self):
-        self.app_state.window_geometry = self.geometry()
-        self.app_state.save()
-        self.worker.shutdown()
-        self.destroy()
-
 
 def main():
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
     os.makedirs(Path(__file__).resolve().parent / "data", exist_ok=True)
-    app = App()
-    app.mainloop()
+    app = QApplication(sys.argv)
+    app.setStyleSheet(STYLESHEET)
+    window = App()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
