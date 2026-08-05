@@ -64,6 +64,7 @@ __all__ = [
     "list_emails",
     "set_active",
     "update_metadata",
+    "update_metadata_bulk",
     "set_label",
     "delete_addresses",
     "bulk_set_label",
@@ -161,6 +162,48 @@ async def update_metadata(cookie_file: str, region: str, email: str, label, note
     hme = _silent_client(cookie_file, region)
     async with hme:
         return await hme.update_metadata(email, label, note)
+
+
+async def update_metadata_bulk(cookie_file: str, region: str, updates, on_progress=None) -> dict:
+    """updates: [(email, label), ...]. Returns {email: bool} success map.
+
+    hme.update_metadata()/_resolve() each do a full "list every one of my
+    Hide My Email addresses" API call just to look up one address's
+    anonymousId. Calling that in a loop — once per address, plus again for
+    every retry — hammers Apple's list endpoint hard enough on anything
+    but a tiny batch to get itself rate-limited partway through, which is
+    indistinguishable from "nothing is working" and doesn't improve on
+    retry since the retry does the exact same thing. Fetching the list
+    once for the whole batch and reusing it fixes that at the source.
+    on_progress(index, total, email, success), if given, fires after each
+    individual address (not necessarily a coroutine)."""
+    hme = _silent_client(cookie_file, region)
+    total = len(updates)
+    async with hme:
+        list_res = await hme.list_email()
+        if not hme._check_response(list_res, "list emails"):
+            list_res = await hme.list_email()  # one retry — transient network blip
+        if not hme._check_response(list_res, "list emails"):
+            results = {}
+            for i, (email, _label) in enumerate(updates, start=1):
+                results[email] = False
+                if on_progress:
+                    on_progress(i, total, email, False)
+            return results
+
+        by_email = {row["hme"]: row for row in list_res["result"]["hmeEmails"] if row.get("hme")}
+        results = {}
+        for i, (email, label) in enumerate(updates, start=1):
+            row = by_email.get(email)
+            if row is None or not row.get("anonymousId"):
+                success = False
+            else:
+                res = await hme.update_email_metadata(row["anonymousId"], label, row.get("note") or "")
+                success = hme._check_response(res, "update email metadata", email)
+            results[email] = success
+            if on_progress:
+                on_progress(i, total, email, success)
+        return results
 
 
 def list_addresses_full(

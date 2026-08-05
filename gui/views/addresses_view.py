@@ -327,10 +327,14 @@ class AddressesView(QWidget):
         actually exist on iCloud — purely local/manual entries just fail
         this call and the local edit still stands regardless.
 
-        Each address gets one automatic retry if the first attempt fails
-        (transient network hiccups are common over many sequential API
-        calls), and progress is reported live via worker.post() as each one
-        completes, since this loop runs on the background asyncio thread."""
+        Uses update_metadata_bulk(), which resolves iCloud's address list
+        ONCE for the whole batch — calling per-address update_metadata() in
+        a loop instead (what this used to do) means one full "list all my
+        addresses" API call per address, which reliably gets rate-limited
+        partway through anything but a tiny batch and then fails
+        everything after, no matter how many times you retry. Progress is
+        still reported live via worker.post() as each address completes,
+        since this runs on the background asyncio thread."""
         if not self.app.app_state.is_signed_in:
             return
         total = len(emails)
@@ -343,31 +347,16 @@ class AddressesView(QWidget):
         self.sync_progress_bar.setValue(0)
         self.sync_progress_bar.setVisible(True)
 
-        async def _push_one(email):
-            result = await backend.update_metadata(
-                self.app.app_state.cookie_file, self.app.app_state.region, email, label, None,
-            )
-            if result.get("ok"):
-                return True
-            # one retry — most failures at this point are transient (network
-            # blip), not "this address doesn't exist on iCloud"
-            result = await backend.update_metadata(
-                self.app.app_state.cookie_file, self.app.app_state.region, email, label, None,
-            )
-            return bool(result.get("ok"))
+        def on_progress(i, sync_total, _email, _success):
+            self.app.worker.post(self._on_icloud_sync_progress, i, sync_total)
 
-        async def _push_all():
-            ok, failed_emails = 0, []
-            for i, email in enumerate(emails, start=1):
-                success = await _push_one(email)
-                if success:
-                    ok += 1
-                else:
-                    failed_emails.append(email)
-                self.app.worker.post(self._on_icloud_sync_progress, i, total)
-            return ok, failed_emails
-
-        self.app.worker.run_coro(_push_all(), on_done=self._on_labels_pushed)
+        updates = [(email, label) for email in emails]
+        self.app.worker.run_coro(
+            backend.update_metadata_bulk(
+                self.app.app_state.cookie_file, self.app.app_state.region, updates, on_progress=on_progress,
+            ),
+            on_done=self._on_labels_pushed,
+        )
 
     def _on_icloud_sync_progress(self, done, total):
         self.sync_progress_bar.setValue(done)
@@ -379,19 +368,18 @@ class AddressesView(QWidget):
         if error is not None:
             self.local_status.setText(f"Saved locally, but iCloud sync errored: {error}")
             return
-        ok, failed_emails = result
+        failed_emails = [email for email, ok in result.items() if not ok]
+        ok = len(result) - len(failed_emails)
         failed = len(failed_emails)
         self._last_failed_icloud_sync = [(email, self._last_sync_label) for email in failed_emails]
         self.retry_sync_btn.setVisible(bool(failed_emails))
         if failed and ok:
             self.local_status.setText(
-                f"Synced {ok} label(s) to iCloud, {failed} failed even after a retry "
-                "(not on iCloud, or offline)."
+                f"Synced {ok} label(s) to iCloud, {failed} failed (not on iCloud, or offline)."
             )
         elif failed:
             self.local_status.setText(
-                f"Saved locally, but iCloud sync failed for {failed} address(es), even after a retry "
-                "(not on iCloud, or offline)."
+                f"Saved locally, but iCloud sync failed for {failed} address(es) (not on iCloud, or offline)."
             )
         else:
             self.local_status.setText(f"Label updated locally and on iCloud ({ok}).")
